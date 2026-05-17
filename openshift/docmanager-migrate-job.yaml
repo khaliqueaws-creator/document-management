@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: docmanager-migrate
+spec:
+  template:
+    spec:
+      containers:
+        - name: migrate
+          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          command:
+            - python
+            - manage.py
+            - migrate
+            - --noinput
+          envFrom:
+            - configMapRef:
+                name: docmanager-config
+            - secretRef:
+                name: docmanager-secrets
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+      restartPolicy: OnFailure
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: docmanager-media-pvc

@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: document-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: document-app
+  template:
+    metadata:
+      labels:
+        app: document-app
+    spec:
+      containers:
+        - name: document-app
+          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          command:
+            - gunicorn
+            - docmanager.wsgi:application
+            - --bind
+            - 0.0.0.0:8000
+            - --workers
+            - "1"
+            - --worker-tmp-dir
+            - /tmp
+            - --timeout
+            - "60"
+            - --access-logfile
+            - "-"
+            - --error-logfile
+            - "-"
+            - --capture-output
+            - --log-level
+            - info
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - configMapRef:
+                name: docmanager-config
+            - secretRef:
+                name: docmanager-secrets
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: document-app-document-app.apps-crc.testing
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8000
+              httpHeaders:
+                - name: Host
+                  value: document-app-document-app.apps-crc.testing
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: media
+          persistentVolumeClaim:
+            claimName: docmanager-media-pvc
