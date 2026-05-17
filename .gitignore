@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+
+# Django local database
+db.sqlite3
+
+# Uploaded files
+media/
+
+# Virtual environment
+venv/
+
+# Environment / secrets
+.env
+env.txt
+*.pem
+*.key
+*.crt
+service-account.json
+
+# Logs
+*.log
+
+# VS Code
+.vscode/

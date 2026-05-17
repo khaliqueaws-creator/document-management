@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<h2>OCR Review</h2>
+
+<form method="post" action="{% url 'confirm_document' %}">
+    {% csrf_token %}
+
+    <input type="hidden" name="temp_file_path" value="{{ temp_file_path }}">
+    <input type="hidden" name="original_filename" value="{{ original_filename }}">
+
+    <div style="
+        display:flex;
+        gap:30px;
+        align-items:flex-start;
+        margin-top:20px;
+    ">
+
+        <!-- LEFT SIDE -->
+        <div style="
+            width:50%;
+            border:1px solid #ccc;
+            padding:15px;
+            border-radius:8px;
+        ">
+
+            <h3>Document Preview</h3>
+
+            {% if temp_file_url %}
+                <img src="{{ temp_file_url }}"
+                     alt="Document Preview"
+                     style="
+                        width:100%;
+                        border:1px solid #ddd;
+                     ">
+            {% else %}
+                <p>No preview available.</p>
+            {% endif %}
+
+        </div>
+
+        <!-- RIGHT SIDE -->
+        <div style="
+            width:50%;
+            border:1px solid #ccc;
+            padding:15px;
+            border-radius:8px;
+        ">
+
+            <h3>Extracted Metadata</h3>
+
+            <label>Document Type</label><br>
+
+            <input type="text"
+                   name="document_type"
+                   value="{{ document_type }}"
+                   style="
+                        width:100%;
+                        padding:8px;
+                        margin-top:5px;
+                        margin-bottom:20px;						
+                   ">
+			<label>Document Subtype</label><br>
+			<input type="text"
+				   name="document_subtype"
+				   value="{{ document_subtype }}"
+				   style="
+						  width:100%; 
+						  padding:8px; 
+						  margin-top:5px; 
+						  margin-bottom:20px;
+				   ">	   
+            <h3>OCR Text</h3>
+
+            <textarea name="ocr_text"
+                      style="
+                        width:100%;
+                        height:350px;
+                        padding:10px;
+                      ">{{ ocr_text }}</textarea>
+
+            <br><br>
+
+            <button type="submit"
+                    style="
+                        padding:10px 20px;
+                        font-size:16px;
+                        cursor:pointer;
+                    ">
+                Confirm & Save
+            </button>
+
+        </div>
+
+    </div>
+
+</form>
+
+{% endblock %}

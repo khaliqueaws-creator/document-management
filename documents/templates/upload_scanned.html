@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Scanned Image{% endblock %}
+
+{% block content %}
+
+<div class="container">
+
+    <h2>Upload Scanned Image</h2>
+
+    <p class="note">
+        Upload a scanned image to extract OCR text and metadata.
+    </p>
+
+    <form method="post" enctype="multipart/form-data">
+
+        {% csrf_token %}
+
+        <div style="margin-bottom:20px;">
+
+            <label>Select scanned image</label><br><br>
+
+            <input type="file"
+                   name="file"
+                   id="fileInput"
+                   accept=".jpg,.jpeg,.png">
+
+        </div>
+
+        <div style="margin-bottom:20px;">
+
+            <img id="imagePreview"
+                 style="
+                    max-width:500px;
+                    display:none;
+                    border:1px solid #ccc;
+                    padding:5px;
+                    border-radius:5px;
+                 ">
+
+        </div>
+
+        <button type="submit">
+            Run OCR
+        </button>
+
+    </form>
+
+</div>
+
+<script>
+
+document.getElementById("fileInput").addEventListener("change", function(event) {
+
+    const file = event.target.files[0];
+
+    const preview = document.getElementById("imagePreview");
+
+    if (file) {
+
+        preview.src = URL.createObjectURL(file);
+
+        preview.style.display = "block";
+    }
+
+});
+
+</script>
+
+{% endblock %}

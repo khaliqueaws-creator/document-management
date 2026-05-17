@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Search Documents{% endblock %}
+
+{% block content %}
+
+<h2>Search Documents</h2>
+
+<form method="get" class="search-box">
+    <input type="text" name="document_type" placeholder="Document Type">
+	<input type="text" name="document_subtype" placeholder="document_subtype">
+    <input type="text" name="department" placeholder="Department">
+    <input type="text" name="author" placeholder="Author">
+    <input type="text" name="tags" placeholder="Tags">
+	<input type="text" name="content" placeholder="Search Document Text">
+    <button type="submit">Search</button>
+</form>
+
+<table>
+    <tr>
+        <th>Document Type</th>
+		<th>Document Subtype</th>
+        <th>Department</th>
+        <th>Author</th>
+        <th>Tags</th>
+        <th>Uploaded At</th>
+        <th>Preview</th>
+    </tr>
+
+    {% for document in documents %}
+    <tr>
+        <td>{{ document.document_type }}</td>
+		<td>{{ document.document_subtype }}</td>
+        <td>{{ document.department }}</td>
+        <td>{{ document.author }}</td>
+        <td>{{ document.tags }}</td>
+        <td>{{ document.uploaded_at }}</td>
+        <td>
+            <a href="{% url 'secure_document_view' document.id %}" target="_blank" rel="noopener">
+			   Open in Browser
+			</a>
+        </td>
+    </tr>
+    {% empty %}
+    <tr>
+        <td colspan="6" class="empty">No documents found.</td>
+    </tr>
+    {% endfor %}
+</table>
+
+{% endblock %}

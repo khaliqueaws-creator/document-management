@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Document{% endblock %}
+
+{% block content %}
+
+<div class="container">
+
+    <h2>Upload Document</h2>
+
+    <p class="note">
+        Upload a file and assign searchable metadata.
+    </p>
+
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        {{ form.as_p }}
+
+        <button type="submit">
+            Upload Document
+        </button>
+    </form>
+
+</div>
+
+{% endblock %}
