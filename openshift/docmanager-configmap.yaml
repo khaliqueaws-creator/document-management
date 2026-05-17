@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: docmanager-config
+data:
+  DJANGO_DEBUG: "False"
+  DJANGO_SECURE_SSL_REDIRECT: "False"
+  ALLOWED_HOSTS: "document-app-document-app.apps-crc.testing,localhost,127.0.0.1,docsdemo.khalique.net"
+  MEDIA_ROOT: "/app/media"
+  OKTA_DOMAIN: "https://trial-9422381.okta.com"
+  OKTA_ISSUER: "https://trial-9422381.okta.com/oauth2/default"
+  OKTA_CALLBACK_URL: "https://docsdemo.khalique.net/oidc/callback"
+  OKTA_LOGOUT_REDIRECT_URL: "https://docsdemo.khalique.net/"

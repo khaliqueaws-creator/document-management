@@ -19,15 +19,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-mvp@pg%pqwjlcdp#uo$y3t@zkj(xj335!2*q5xzd+#mk-j&$rs'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
 import os
 from dotenv import load_dotenv
+
 load_dotenv()
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("DJANGO_SECRET_KEY environment variable is required")
+
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
 
 OKTA_DOMAIN = os.getenv("OKTA_DOMAIN")
 OKTA_ISSUER = os.getenv("OKTA_ISSUER")
@@ -48,7 +51,10 @@ LOGOUT_REDIRECT_URL = "/"
 
 
 
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
+ALLOWED_HOSTS = [
+    host.strip() for host in os.environ.get("ALLOWED_HOSTS", "").split(",")
+    if host.strip()
+]
 
 
 # Application definition
@@ -95,7 +101,6 @@ WSGI_APPLICATION = 'docmanager.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-import os
 
 DATABASES = {
     "default": {
@@ -146,4 +151,12 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
+
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "True").lower() in ("1", "true", "yes")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+X_FRAME_OPTIONS = "DENY"

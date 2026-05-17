@@ -36,8 +36,6 @@ def login(request):
 
 def oidc_callback(request):
     token = oauth.okta.authorize_access_token(request)
-    
-    print("TOKEN:", token, flush=True)
 
     userinfo = token.get("userinfo")
 
@@ -48,8 +46,6 @@ def oidc_callback(request):
         token["id_token"],
         options={"verify_signature": False}
     )
-
-    print(json.dumps(decoded_token, indent=2))
 
     raw_groups = decoded_token.get("django_groups", [])
 
@@ -72,7 +68,6 @@ def oidc_callback(request):
         "preferred_username": userinfo.get("preferred_username"),
         "groups": userinfo.get("groups", []),
     }
-    print("USER GROUPS:", userinfo.get("groups", []), flush=True)    
 
     return redirect("/")
 
