@@ -9,6 +9,6 @@ oauth.register(
     client_secret=settings.OKTA_CLIENT_SECRET,
     server_metadata_url=f"{settings.OKTA_ISSUER}/.well-known/openid-configuration",
     client_kwargs={
-        "scope": "openid profile email groups"
+        "scope": "openid profile email"
     },
 )

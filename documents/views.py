@@ -38,6 +38,22 @@ def login(request):
     )
 
 
+def normalize_okta_groups(raw_groups):
+    group_names = []
+
+    for group in raw_groups or []:
+        if isinstance(group, str):
+            group_names.append(group)
+
+        elif isinstance(group, dict):
+            name = group.get("profile", {}).get("name") or group.get("name")
+
+            if name:
+                group_names.append(name)
+
+    return group_names
+
+
 def oidc_callback(request):
     token = oauth.okta.authorize_access_token(request)
 
@@ -51,26 +67,20 @@ def oidc_callback(request):
         options={"verify_signature": False}
     )
 
-    raw_groups = decoded_token.get("django_groups", [])
-
     group_names = []
 
-    for group in raw_groups:
-        if isinstance(group, str):
-            group_names.append(group)
+    for claim_name in ("django_groups", "groups"):
+        group_names.extend(normalize_okta_groups(decoded_token.get(claim_name)))
 
-        elif isinstance(group, dict):
-            name = group.get("profile", {}).get("name")
-
-            if name:
-                group_names.append(name)
+    group_names.extend(normalize_okta_groups(userinfo.get("groups")))
+    group_names = sorted(set(group_names))
 
     request.session["user"] = {
         "sub": userinfo.get("sub"),
         "name": userinfo.get("name"),
         "email": userinfo.get("email"),
         "preferred_username": userinfo.get("preferred_username"),
-        "groups": userinfo.get("groups", []),
+        "groups": group_names,
     }
 
     return redirect("/")
