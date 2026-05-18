@@ -1,6 +1,6 @@
 from django.core.files.storage import FileSystemStorage
 from django.core.files import File
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import render, redirect
 from django.conf import settings
 from django.contrib.auth import logout as django_logout
@@ -25,6 +25,10 @@ from PIL import Image
 import pytesseract
 from pdf2image import convert_from_path
 from openpyxl import load_workbook
+
+
+def healthz(request):
+    return HttpResponse("ok", content_type="text/plain")
 
 
 def login(request):

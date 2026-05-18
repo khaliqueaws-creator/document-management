@@ -48,7 +48,7 @@ spec:
               mountPath: /app/media
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz/
               port: 8000
               httpHeaders:
                 - name: Host
@@ -57,7 +57,7 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz/
               port: 8000
               httpHeaders:
                 - name: Host
