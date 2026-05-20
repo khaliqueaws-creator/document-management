@@ -5,6 +5,7 @@ from django.shortcuts import render, redirect
 from django.conf import settings
 from django.contrib.auth import logout as django_logout
 from django.db.models import Q
+from django.urls import reverse
 
 from .forms import DocumentForm
 from .models import Document
@@ -29,6 +30,16 @@ from openpyxl import load_workbook
 
 def healthz(request):
     return HttpResponse("ok", content_type="text/plain")
+
+
+def get_temp_upload_path(filename):
+    temp_dir = os.path.abspath(os.path.join(settings.MEDIA_ROOT, "temp"))
+    file_path = os.path.abspath(os.path.join(temp_dir, os.path.basename(filename)))
+
+    if not file_path.startswith(temp_dir + os.sep):
+        raise Http404("Temporary scanned file not found")
+
+    return file_path
 
 
 def login(request):
@@ -151,19 +162,21 @@ def upload_scanned_image(request):
         os.makedirs(temp_dir, exist_ok=True)
 
         fs = FileSystemStorage(
-            location=temp_dir,
-            base_url=settings.MEDIA_URL + "temp/"
+            location=temp_dir
         )
 
         temp_filename = fs.save(uploaded_file.name, uploaded_file)
         temp_file_path = os.path.join(temp_dir, temp_filename)
-        temp_file_url = fs.url(temp_filename)
+        temp_file_url = reverse(
+            "temp_scanned_preview",
+            kwargs={"filename": temp_filename}
+        )
 
         ocr_text = extract_text_from_file(temp_file_path)
         metadata = extract_metadata_from_ocr(ocr_text)
 
         return render(request, "ocr_review.html", {
-            "temp_file_path": temp_file_path,
+            "temp_filename": temp_filename,
             "temp_file_url": temp_file_url,
             "original_filename": uploaded_file.name,
             "ocr_text": ocr_text,
@@ -174,6 +187,21 @@ def upload_scanned_image(request):
 
     return render(request, "upload_scanned.html")
 
+
+@okta_role_required(is_loader)
+def temp_scanned_preview(request, filename):
+    file_path = get_temp_upload_path(filename)
+
+    if not os.path.exists(file_path):
+        raise Http404("Temporary scanned file not found")
+
+    return FileResponse(
+        open(file_path, "rb"),
+        as_attachment=False,
+        filename=os.path.basename(file_path)
+    )
+
+
 @okta_role_required(is_loader)
 def confirm_document(request):
 
@@ -182,12 +210,17 @@ def confirm_document(request):
 
     if request.method == "POST":
 
-        temp_file_path = request.POST.get("temp_file_path")
+        temp_filename = request.POST.get("temp_filename")
         document_type = request.POST.get("document_type", "")
         document_subtype = request.POST.get("document_subtype", "")
         ocr_text = request.POST.get("ocr_text", "")
 
-        if not temp_file_path or not os.path.exists(temp_file_path):
+        if not temp_filename:
+            raise Http404("Temporary scanned file not found")
+
+        temp_file_path = get_temp_upload_path(temp_filename)
+
+        if not os.path.exists(temp_file_path):
             raise Http404("Temporary scanned file not found")
 
         document = Document()

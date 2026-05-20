@@ -25,6 +25,12 @@ urlpatterns = [
         name="confirm_document"
     ),
 
+    path(
+        "ocr/temp-preview/<str:filename>/",
+        views.temp_scanned_preview,
+        name="temp_scanned_preview"
+    ),
+
     # OIDC routes
     path("login/", views.login, name="login"),
 

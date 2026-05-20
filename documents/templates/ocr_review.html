@@ -7,7 +7,7 @@
 <form method="post" action="{% url 'confirm_document' %}">
     {% csrf_token %}
 
-    <input type="hidden" name="temp_file_path" value="{{ temp_file_path }}">
+    <input type="hidden" name="temp_filename" value="{{ temp_filename }}">
     <input type="hidden" name="original_filename" value="{{ original_filename }}">
 
     <div style="
