@@ -19,6 +19,19 @@ def validate_uploaded_file(uploaded_file, allowed_extensions):
             f"Unsupported file type '{extension}'. Allowed types: {allowed}."
         )
 
+    allowed_content_types = settings.ALLOWED_UPLOAD_CONTENT_TYPES.get(
+        extension,
+        set()
+    )
+    content_type = getattr(uploaded_file, "content_type", "")
+
+    if allowed_content_types and content_type not in allowed_content_types:
+        allowed = ", ".join(sorted(allowed_content_types))
+        raise ValidationError(
+            f"Unsupported file content type '{content_type}'. "
+            f"Allowed content types for {extension}: {allowed}."
+        )
+
     if uploaded_file.size > settings.MAX_UPLOAD_SIZE_BYTES:
         raise ValidationError(
             f"File is too large. Maximum size is {settings.MAX_UPLOAD_SIZE_MB} MB."

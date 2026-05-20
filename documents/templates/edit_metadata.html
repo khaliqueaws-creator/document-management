@@ -25,6 +25,12 @@
             <a href="{% url 'search' %}" class="secondary-action">
                 Cancel
             </a>
+
+            {% if "DjangoAdmin" in request.session.user.groups %}
+            <a href="{% url 'delete_document' document.id %}" class="secondary-action danger-link">
+                Delete Document
+            </a>
+            {% endif %}
         </form>
     </div>
 

@@ -155,6 +155,8 @@ MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 
 MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "20"))
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_BYTES
+FILE_UPLOAD_MAX_MEMORY_SIZE = min(MAX_UPLOAD_SIZE_BYTES, 5 * 1024 * 1024)
 DOCUMENTS_PER_PAGE = int(os.environ.get("DOCUMENTS_PER_PAGE", "10"))
 ALLOWED_DOCUMENT_EXTENSIONS = (
     ".pdf",
@@ -174,6 +176,21 @@ ALLOWED_SCANNED_IMAGE_EXTENSIONS = (
     ".tiff",
     ".bmp",
 )
+ALLOWED_UPLOAD_CONTENT_TYPES = {
+    ".pdf": {"application/pdf"},
+    ".docx": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    },
+    ".txt": {"text/plain"},
+    ".xlsx": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    },
+    ".png": {"image/png"},
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".tiff": {"image/tiff"},
+    ".bmp": {"image/bmp", "image/x-ms-bmp"},
+}
 
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True

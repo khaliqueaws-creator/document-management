@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Delete Document{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Delete Document</h2>
+        <p class="note">{{ document.file.name }}</p>
+    </div>
+</div>
+
+<div class="confirm-panel">
+    <p>
+        This will permanently remove the document file and its metadata from the portal.
+        The delete action will be retained in the audit table.
+    </p>
+
+    <dl class="metadata-list">
+        <dt>Document Type</dt>
+        <dd>{{ document.document_type|default:"Untyped document" }}</dd>
+        <dt>Department</dt>
+        <dd>{{ document.department|default:"-" }}</dd>
+        <dt>Author</dt>
+        <dd>{{ document.author|default:"-" }}</dd>
+        <dt>Uploaded</dt>
+        <dd>{{ document.uploaded_at|date:"M d, Y H:i" }}</dd>
+    </dl>
+
+    <form method="post">
+        {% csrf_token %}
+        <button type="submit" class="danger-button">
+            Delete Document
+        </button>
+        <a href="{% url 'edit_document_metadata' document.id %}" class="secondary-action">
+            Cancel
+        </a>
+    </form>
+</div>
+
+{% endblock %}

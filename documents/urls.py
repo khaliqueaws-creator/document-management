@@ -44,6 +44,8 @@ urlpatterns = [
 
     path("profile/", views.profile, name="profile"),
 
+    path("audit/", views.audit_events, name="audit_events"),
+
     # Secure document viewing
     path(
         "view/<int:document_id>/",

@@ -31,3 +31,35 @@ class Document(models.Model):
 
     def __str__(self):
         return self.file.name
+
+
+class AuditEvent(models.Model):
+    ACTION_UPLOAD = "upload"
+    ACTION_EDIT = "edit"
+    ACTION_DELETE = "delete"
+
+    ACTION_CHOICES = [
+        (ACTION_UPLOAD, "Upload"),
+        (ACTION_EDIT, "Edit metadata"),
+        (ACTION_DELETE, "Delete"),
+    ]
+
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_events",
+    )
+    document_name = models.CharField(max_length=255, blank=True)
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    actor_name = models.CharField(max_length=150, blank=True)
+    actor_email = models.EmailField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.get_action_display()} - {self.document_name}"

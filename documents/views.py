@@ -14,7 +14,7 @@ from .forms import (
     DocumentMetadataForm,
     validate_uploaded_file,
 )
-from .models import Document
+from .models import AuditEvent, Document
 from .auth import oauth
 from .permissions import (
     okta_role_required,
@@ -33,6 +33,48 @@ from PIL import ImageOps
 import pytesseract
 from pdf2image import convert_from_path
 from openpyxl import load_workbook
+
+
+def get_session_user(request):
+    return request.session.get("user", {})
+
+
+def get_actor_name(request):
+    user = get_session_user(request)
+    return (
+        user.get("name")
+        or user.get("email")
+        or user.get("preferred_username")
+        or ""
+    )
+
+
+def get_actor_email(request):
+    user = get_session_user(request)
+    return user.get("email") or user.get("preferred_username") or ""
+
+
+def get_document_audit_metadata(document):
+    return {
+        "document_type": document.document_type,
+        "document_subtype": document.document_subtype,
+        "department": document.department,
+        "author": document.author,
+        "tags": document.tags,
+        "ocr_language": document.ocr_language,
+        "file": document.file.name if document.file else "",
+    }
+
+
+def record_audit_event(request, document, action, metadata=None):
+    AuditEvent.objects.create(
+        document=document if document.pk else None,
+        document_name=document.file.name if document.file else "",
+        action=action,
+        actor_name=get_actor_name(request),
+        actor_email=get_actor_email(request),
+        metadata=metadata or get_document_audit_metadata(document),
+    )
 
 
 def healthz(request):
@@ -201,6 +243,8 @@ def upload_document(request):
                 document.extracted_text = f"TEXT_EXTRACTION_FAILED: {str(e)}"
                 document.save()
 
+            record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
+
             return redirect("/")
 
     else:
@@ -344,6 +388,7 @@ def confirm_document(request):
             )
 
         document.save()
+        record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         try:
             os.remove(temp_file_path)
@@ -398,6 +443,19 @@ def search_documents(request):
     })
 
 
+@okta_role_required(is_admin)
+def audit_events(request):
+    events = AuditEvent.objects.select_related("document").all()
+    paginator = Paginator(events, settings.DOCUMENTS_PER_PAGE)
+    page_obj = paginator.get_page(request.GET.get("page"))
+
+    return render(request, "audit_events.html", {
+        "events": page_obj,
+        "page_obj": page_obj,
+        "total_events": paginator.count,
+    })
+
+
 @okta_role_required(is_viewer)
 def secure_document_view(request, document_id):
     try:
@@ -430,7 +488,19 @@ def edit_document_metadata(request, document_id):
         form = DocumentMetadataForm(request.POST, instance=document)
 
         if form.is_valid():
+            before_metadata = get_document_audit_metadata(document)
             form.save()
+            document.refresh_from_db()
+            after_metadata = get_document_audit_metadata(document)
+            record_audit_event(
+                request,
+                document,
+                AuditEvent.ACTION_EDIT,
+                {
+                    "before": before_metadata,
+                    "after": after_metadata,
+                },
+            )
             return redirect("search")
 
     else:
@@ -459,14 +529,26 @@ def delete_document(request, document_id):
     except Document.DoesNotExist:
         raise Http404("Document not found")
 
-    file_path = document.file.path
+    if request.method == "POST":
+        file_path = document.file.path
+        audit_metadata = get_document_audit_metadata(document)
 
-    if file_path and os.path.exists(file_path):
-        os.remove(file_path)
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
 
-    document.delete()
+        record_audit_event(
+            request,
+            document,
+            AuditEvent.ACTION_DELETE,
+            audit_metadata,
+        )
+        document.delete()
 
-    return redirect("/")
+        return redirect("/")
+
+    return render(request, "delete_document.html", {
+        "document": document,
+    })
 
 def extract_metadata_from_ocr(ocr_text):
     metadata = {

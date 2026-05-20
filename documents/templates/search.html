@@ -22,45 +22,22 @@
     <a href="{% url 'search' %}" class="secondary-action search-reset">Reset</a>
 </form>
 
-{% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
-<div class="table-toolbar">
-    <button type="button" id="editSelectedButton" disabled>
-        Edit
-    </button>
-    <span id="selectedDocumentLabel" class="muted-text">
-        Select one document to edit.
-    </span>
-</div>
-{% endif %}
-
 <div class="table-wrap">
     <table>
         <thead>
             <tr>
-                {% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
-                <th class="select-column">Select</th>
-                {% endif %}
                 <th>Document</th>
                 <th>Department</th>
                 <th>OCR Language</th>
                 <th>Author</th>
                 <th>Tags</th>
                 <th>Uploaded</th>
-                <th>Links</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
             {% for document in documents %}
             <tr>
-                {% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
-                <td class="select-column">
-                    <input type="checkbox"
-                           class="document-select"
-                           aria-label="Select {{ document.document_type|default:'document' }}"
-                           data-edit-url="{% url 'edit_document_metadata' document.id %}"
-                           data-label="{{ document.document_type|default:'Untyped document' }}">
-                </td>
-                {% endif %}
                 <td>
                     <div class="primary-text">{{ document.document_type|default:"Untyped document" }}</div>
                     <div class="muted-text">{{ document.document_subtype|default:"No subtype" }}</div>
@@ -71,14 +48,26 @@
                 <td>{{ document.tags|default:"-" }}</td>
                 <td>{{ document.uploaded_at|date:"M d, Y H:i" }}</td>
                 <td>
-                    <a href="{% url 'secure_document_view' document.id %}" target="_blank" rel="noopener">
-                        Open
-                    </a>
+                    <div class="action-list">
+                        <a href="{% url 'secure_document_view' document.id %}" target="_blank" rel="noopener">
+                            Open
+                        </a>
+                        {% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
+                        <a href="{% url 'edit_document_metadata' document.id %}">
+                            Edit
+                        </a>
+                        {% endif %}
+                        {% if "DjangoAdmin" in request.session.user.groups %}
+                        <a href="{% url 'delete_document' document.id %}" class="danger-link">
+                            Delete
+                        </a>
+                        {% endif %}
+                    </div>
                 </td>
             </tr>
             {% empty %}
             <tr>
-                <td colspan="{% if 'DjangoLoader' in request.session.user.groups or 'DjangoAdmin' in request.session.user.groups %}8{% else %}7{% endif %}" class="empty">
+                <td colspan="7" class="empty">
                     No documents found.
                 </td>
             </tr>
@@ -103,40 +92,6 @@
         <span>Next</span>
     {% endif %}
 </nav>
-{% endif %}
-
-{% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
-<script>
-    const editButton = document.getElementById("editSelectedButton");
-    const selectedLabel = document.getElementById("selectedDocumentLabel");
-    const checkboxes = document.querySelectorAll(".document-select");
-
-    checkboxes.forEach((checkbox) => {
-        checkbox.addEventListener("change", () => {
-            if (checkbox.checked) {
-                checkboxes.forEach((otherCheckbox) => {
-                    if (otherCheckbox !== checkbox) {
-                        otherCheckbox.checked = false;
-                    }
-                });
-
-                editButton.disabled = false;
-                editButton.dataset.editUrl = checkbox.dataset.editUrl;
-                selectedLabel.textContent = checkbox.dataset.label;
-            } else {
-                editButton.disabled = true;
-                delete editButton.dataset.editUrl;
-                selectedLabel.textContent = "Select one document to edit.";
-            }
-        });
-    });
-
-    editButton.addEventListener("click", () => {
-        if (editButton.dataset.editUrl) {
-            window.location.href = editButton.dataset.editUrl;
-        }
-    });
-</script>
 {% endif %}
 
 {% endblock %}
