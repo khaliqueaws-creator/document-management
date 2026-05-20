@@ -12,6 +12,42 @@ spec:
       labels:
         app: document-app
     spec:
+      initContainers:
+        - name: migrate
+          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              python - <<'PY'
+              import os
+              import socket
+              import time
+
+              host = os.environ.get("DB_HOST", "mysql")
+              port = int(os.environ.get("DB_PORT", "3306"))
+              deadline = time.time() + 120
+
+              while time.time() < deadline:
+                  try:
+                      with socket.create_connection((host, port), timeout=5):
+                          break
+                  except OSError:
+                      print(f"Waiting for MySQL at {host}:{port}...")
+                      time.sleep(5)
+              else:
+                  raise SystemExit(f"MySQL was not reachable at {host}:{port} after 120 seconds")
+              PY
+              python manage.py migrate --noinput
+          envFrom:
+            - configMapRef:
+                name: docmanager-config
+            - secretRef:
+                name: docmanager-secrets
+          volumeMounts:
+            - name: media
+              mountPath: /app/media
       containers:
         - name: document-app
           image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest

@@ -1,81 +1,58 @@
-# OpenShift CRC Deployment Runbook
+# OpenShift CRC Runbook
 
-These manifests deploy the Django document manager to OpenShift CRC using:
+Deploy, restart, and troubleshoot the Django document manager on local OpenShift CRC.
 
-- a Docker image built from the repository `Dockerfile`
-- an OpenShift `ConfigMap` for non-sensitive settings
-- an OpenShift `Secret` for Django, Okta, and database secrets
-- a PVC mounted at `/app/media`
-- a one-time migration `Job`
-- a `Deployment` running Gunicorn
-- a `Service` and `Route` to expose the app
+> [!IMPORTANT]
+> Do not commit real production secret values to GitHub. If `openshift/docmanager-secret-template.yaml` contains live values, keep it local or replace them with placeholders before committing.
 
-## Files
+## Contents
 
-- `docmanager-configmap.yaml`: non-sensitive environment variables
-- `docmanager-secret-template.yaml`: sensitive values such as `DJANGO_SECRET_KEY`, Okta client secret, and DB password
-- `docmanager-pvc.yaml`: persistent media storage mounted at `/app/media`
-- `docmanager-deployment.yaml`: app deployment using Gunicorn, env refs, PVC, and health probes
-- `docmanager-service.yaml`: service exposing the app inside the project on port 80
-- `docmanager-route.yaml`: external OpenShift route for browser access
-- `docmanager-migrate-job.yaml`: one-time job to run Django migrations
+| Section | Use When |
+| --- | --- |
+| [A. Rebuild From Scratch](#a-rebuild-from-scratch) | CRC was recreated, the project was removed, or you want a clean local deployment. |
+| [B. Stop CRC And Start CRC Then Check App](#b-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
+| [C. Some Troubleshooting Tips](#c-some-troubleshooting-tips) | Pods, routes, migrations, probes, or login checks are failing. |
 
-Do not commit real production secret values to GitHub. If `docmanager-secret-template.yaml` contains real values, keep the file local or replace them with placeholders before committing.
+## A. Rebuild From Scratch
 
-## Rebuild From Scratch
+Use this path when you need a clean deployment in the `docmanager` OpenShift project.
 
-Use this section if CRC was deleted, the `docmanager` project was removed, or you want to recreate everything cleanly.
+### 1. Start In The Project
 
-### 1. Create Or Select The Project
+Create the project:
 
 ```powershell
 oc new-project docmanager
 ```
 
-If the project already exists:
+If it already exists, select it:
 
 ```powershell
 oc project docmanager
-```
-
-Confirm:
-
-```powershell
 oc project -q
 ```
 
-### 2. Prepare Local Secret Values
+### 2. Prepare Secrets And Config
 
-Generate a Django secret key:
+Generate local secret values:
 
 ```powershell
 $SecretKey = python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-$SecretKey
-```
-
-Generate database passwords:
-
-```powershell
 $DbPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
 $RootDbPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
+
+$SecretKey
 $DbPassword
 $RootDbPassword
 ```
 
-Update `openshift/docmanager-secret-template.yaml` before applying it:
+Then update:
 
-```yaml
-DJANGO_SECRET_KEY: "<generated-django-secret>"
-OKTA_CLIENT_ID: "<okta-client-id>"
-OKTA_CLIENT_SECRET: "<okta-client-secret>"
-DB_NAME: "document_management"
-DB_USER: "docuser"
-DB_PASSWORD: "<db-password>"
-DB_HOST: "mysql"
-DB_PORT: "3306"
-```
-
-The `DB_PASSWORD` value must match the `MYSQL_PASSWORD` value used when creating MySQL.
+| File | What To Check |
+| --- | --- |
+| `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database name, user, passwords, host, and port. |
+| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, and `ALLOWED_HOSTS`. |
+| `openshift/docmanager-deployment.yaml` | Probe `Host` header. It must also appear in `ALLOWED_HOSTS`. |
 
 ### 3. Build The App Image
 
@@ -85,7 +62,7 @@ Create the binary Docker build if it does not exist:
 oc new-build --name=document-app --binary --strategy=docker
 ```
 
-Build the image from the repository root:
+Build from the repository root:
 
 ```powershell
 oc start-build document-app --from-dir=. --follow
@@ -98,72 +75,44 @@ oc get imagestream document-app
 oc get istag document-app:latest
 ```
 
-### 4. Create MySQL
+> [!NOTE]
+> If the project name is not `docmanager`, update the image path in `openshift/docmanager-deployment.yaml` and `openshift/docmanager-migrate-job.yaml`.
 
-Create the MySQL app and service:
+### 4. Apply Resources
 
-```powershell
-oc new-app mysql:8.0 `
-  -e MYSQL_DATABASE=document_management `
-  -e MYSQL_USER=docuser `
-  -e MYSQL_PASSWORD="$DbPassword" `
-  -e MYSQL_ROOT_PASSWORD="$RootDbPassword" `
-  --name=mysql
-```
-
-Wait for MySQL:
+Apply MySQL resources first. MySQL reads database values from `docmanager-secrets`.
 
 ```powershell
+oc apply -f openshift/docmanager-secret-template.yaml
+oc apply -f openshift/mysql-pvc.yaml
+oc apply -f openshift/mysql-deployment.yaml
 oc rollout status deployment/mysql
-oc get svc mysql
-oc get pods
 ```
 
-### 5. Apply Django Resources
+Apply the Django resources:
 
 ```powershell
 oc apply -f openshift/docmanager-configmap.yaml
-oc apply -f openshift/docmanager-secret-template.yaml
 oc apply -f openshift/docmanager-pvc.yaml
 oc apply -f openshift/docmanager-service.yaml
 oc apply -f openshift/docmanager-route.yaml
 oc apply -f openshift/docmanager-deployment.yaml
+oc rollout status deployment/document-app
 ```
 
-Wait for the app:
+The `document-app` deployment runs migrations automatically in an init container before Gunicorn starts.
+
+### 5. Verify The App
+
+Check OpenShift objects:
 
 ```powershell
-oc rollout status deployment/document-app
 oc get pods
 oc get svc
+oc get route
 ```
 
-### 6. Run Migrations
-
-```powershell
-oc apply -f openshift/docmanager-migrate-job.yaml
-oc wait --for=condition=complete job/docmanager-migrate --timeout=180s
-oc logs job/docmanager-migrate
-```
-
-If you need to rerun the migration job after changing the image or migration files:
-
-```powershell
-oc delete job docmanager-migrate
-oc apply -f openshift/docmanager-migrate-job.yaml
-oc wait --for=condition=complete job/docmanager-migrate --timeout=180s
-oc logs job/docmanager-migrate
-```
-
-### 7. Restart And Verify
-
-```powershell
-oc rollout restart deployment/document-app
-oc rollout status deployment/document-app
-oc get pods
-```
-
-Test through local port-forward:
+Start a local port-forward:
 
 ```powershell
 oc port-forward svc/document-app 8080:80
@@ -178,48 +127,77 @@ curl.exe -v http://localhost:8080/login/
 
 Expected results:
 
-- `/` returns `302` to `/login/`
-- `/login/` returns `302` to Okta
+| URL | Expected Result |
+| --- | --- |
+| `/` | `302` redirect to `/login/` |
+| `/login/` | `302` redirect to Okta |
 
-### 8. Cloudflare Tunnel Access
-
-Keep the OpenShift port-forward running:
-
-```powershell
-oc port-forward svc/document-app 8080:80
-```
-
-In another PowerShell window, run the tunnel:
+For Cloudflare tunnel access, keep the port-forward running and start the tunnel:
 
 ```powershell
 cloudflared tunnel --config C:\Users\UFUserAdmin\.cloudflared\config.yml run docmanager
 ```
 
-The local Cloudflare config should point to the local forwarded port:
-
-```yaml
-ingress:
-  - hostname: docsdemo.khalique.net
-    service: http://localhost:8080
-  - service: http_status:404
-```
-
-Test:
+Test the public hostname:
 
 ```powershell
 curl.exe -vk https://docsdemo.khalique.net/
 curl.exe -vk https://docsdemo.khalique.net/login/
 ```
 
-Expected results:
-
-- `/` returns `302` to `/login/`
-- `/login/` returns `302` to Okta
-
-Then complete login in the browser:
+Browser URL:
 
 ```text
 https://docsdemo.khalique.net/login/
+```
+
+## B. Stop CRC And Start CRC Then Check App
+
+Use this path for normal local shutdown and startup.
+
+### 1. Stop And Start CRC
+
+```powershell
+crc stop
+crc start
+```
+
+> [!CAUTION]
+> `crc stop` is safe for normal shutdown. `crc delete` destroys the local CRC VM and can remove local cluster data.
+
+### 2. Select The Project
+
+```powershell
+oc project docmanager
+oc project -q
+```
+
+### 3. Check The App
+
+```powershell
+oc get pods
+oc get svc
+oc get route
+```
+
+If the app needs a fresh pod after CRC starts:
+
+```powershell
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+Start port-forward:
+
+```powershell
+oc port-forward svc/document-app 8080:80
+```
+
+In another PowerShell window:
+
+```powershell
+curl.exe -v http://localhost:8080/
+curl.exe -v http://localhost:8080/login/
 ```
 
 Watch logs while testing:
@@ -228,236 +206,50 @@ Watch logs while testing:
 oc logs deployment/document-app -f
 ```
 
-## 1. Select The Project
+## C. Some Troubleshooting Tips
+
+### Quick Checks
 
 ```powershell
-oc project docmanager
-```
-
-Confirm:
-
-```powershell
-oc project -q
-```
-
-## 2. Build The App Image
-
-The deployment expects this image:
-
-```text
-image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
-```
-
-If the image stream/build does not exist yet, create it from the local `Dockerfile`:
-
-```powershell
-oc new-build --name=document-app --binary --strategy=docker
-oc start-build document-app --from-dir=. --follow
-```
-
-Check the image:
-
-```powershell
-oc get imagestream document-app
-oc get istag document-app:latest
-```
-
-If the project name is not `docmanager`, update the image path in both:
-
-- `openshift/docmanager-deployment.yaml`
-- `openshift/docmanager-migrate-job.yaml`
-
-Use:
-
-```text
-image-registry.openshift-image-registry.svc:5000/<project-name>/document-app:latest
-```
-
-## 3. Prepare Secrets
-
-Generate a Django secret key from PowerShell:
-
-```powershell
-$SecretKey = python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
-$SecretKey
-```
-
-Generate a database password if needed:
-
-```powershell
-$DbPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-$DbPassword
-```
-
-Update `openshift/docmanager-secret-template.yaml` with real values:
-
-```yaml
-DJANGO_SECRET_KEY: "<generated-django-secret>"
-OKTA_CLIENT_ID: "<okta-client-id>"
-OKTA_CLIENT_SECRET: "<okta-client-secret>"
-DB_NAME: "document_management"
-DB_USER: "docuser"
-DB_PASSWORD: "<db-password>"
-DB_HOST: "mysql"
-DB_PORT: "3306"
-```
-
-## 4. Prepare Config
-
-Review `openshift/docmanager-configmap.yaml`.
-
-Important values:
-
-```yaml
-ALLOWED_HOSTS: "document-app-document-app.apps-crc.testing,localhost,127.0.0.1,docsdemo.khalique.net"
-OKTA_DOMAIN: "https://your-okta-domain.okta.com"
-OKTA_ISSUER: "https://your-okta-domain.okta.com/oauth2/default"
-OKTA_CALLBACK_URL: "https://your-app-route/oidc/callback"
-OKTA_LOGOUT_REDIRECT_URL: "https://your-app-route/"
-```
-
-The health probes in `docmanager-deployment.yaml` send a `Host` header that must also be listed in `ALLOWED_HOSTS`.
-
-## 5. Create MySQL
-
-The Django app expects a database host named `mysql`.
-
-Check whether it already exists:
-
-```powershell
-oc get svc
-oc get pods
-```
-
-If there is no `mysql` service, create one:
-
-```powershell
-oc new-app mysql:8.0 `
-  -e MYSQL_DATABASE=document_management `
-  -e MYSQL_USER=docuser `
-  -e MYSQL_PASSWORD="$DbPassword" `
-  -e MYSQL_ROOT_PASSWORD="<root-db-password>" `
-  --name=mysql
-```
-
-Wait for MySQL:
-
-```powershell
-oc rollout status deployment/mysql
-oc get pods
-```
-
-The value used for `MYSQL_PASSWORD` must match `DB_PASSWORD` in `docmanager-secret-template.yaml`.
-
-## 6. Apply App Resources
-
-```powershell
-oc apply -f openshift/docmanager-configmap.yaml
-oc apply -f openshift/docmanager-secret-template.yaml
-oc apply -f openshift/docmanager-pvc.yaml
-oc apply -f openshift/docmanager-deployment.yaml
-oc apply -f openshift/docmanager-service.yaml
-oc apply -f openshift/docmanager-route.yaml
-```
-
-Check the app pod, service, and route:
-
-```powershell
-oc get pods
-oc get svc document-app
-oc get route document-app
-oc describe pod -l app=document-app
-```
-
-If a pod shows `InvalidImageName`, check for an unreplaced `<your-project>` placeholder in the image path.
-
-Note: a `Deployment` only creates pods. Browser/network access requires the separate `Service` and `Route` manifests.
-
-## 7. Run Migrations
-
-Jobs are immutable in Kubernetes/OpenShift. If the migration job already exists and you changed its image or environment, delete and recreate it:
-
-```powershell
-oc delete job docmanager-migrate
-oc apply -f openshift/docmanager-migrate-job.yaml
-```
-
-If the job does not exist yet, `oc delete` may print a not found error. That is okay; then apply the job.
-
-Wait and check logs:
-
-```powershell
-oc wait --for=condition=complete job/docmanager-migrate --timeout=120s
-oc logs job/docmanager-migrate
-```
-
-If migration logs show `Unknown server host 'mysql'`, the MySQL service does not exist or `DB_HOST` is wrong.
-
-If login succeeds but `/` returns `500`, check whether the database schema matches the Django model:
-
-```powershell
-oc logs deployment/document-app --tail=200
-oc delete job docmanager-migrate
-oc apply -f openshift/docmanager-migrate-job.yaml
-oc logs job/docmanager-migrate
-```
-
-After adding or changing migration files, rebuild the image before recreating the migration job:
-
-```powershell
-oc start-build document-app --from-dir=. --follow
-```
-
-## 8. Restart And Verify The App
-
-```powershell
-oc rollout restart deployment/document-app
-oc rollout status deployment/document-app
 oc get pods
 oc get svc
 oc get route
+oc get events --sort-by=.lastTimestamp
 ```
 
-Check logs:
+### Common Issues
+
+| Symptom | Check |
+| --- | --- |
+| Pod shows `InvalidImageName` | Look for an unreplaced project placeholder in the deployment or migration job image path. |
+| MySQL is not reachable | Confirm `oc get svc mysql`, `oc get pods`, and `DB_HOST: "mysql"` in the secret. |
+| Probe returns `HTTP 400` | Make sure the probe `Host` header is listed in `ALLOWED_HOSTS`. |
+| Login works but `/` returns `500` | Check app logs and confirm migrations ran successfully. |
+| Migration files changed | Rebuild the app image before restarting the deployment. |
+
+### Logs And Details
 
 ```powershell
-oc logs deployment/document-app
-```
-
-Common probe issue:
-
-- `HTTP probe failed with statuscode: 400` usually means Django rejected the probe host.
-- Make sure the probe `Host` header in `docmanager-deployment.yaml` is listed in `ALLOWED_HOSTS`.
-
-## Useful Commands
-
-Decode a value from the OpenShift secret:
-
-```powershell
-$Encoded = oc get secret docmanager-secrets -o jsonpath="{.data.DB_PASSWORD}"
-[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Encoded))
-```
-
-Update the deployment image directly:
-
-```powershell
-oc set image deployment/document-app document-app=image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
-```
-
-View services:
-
-```powershell
-oc get svc
-```
-
-Show the application URL:
-
-```powershell
+oc logs deployment/document-app --tail=200
+oc describe pod -l app=document-app
 oc get route document-app -o jsonpath="{.spec.host}"
 ```
 
-View recent events:
+### Fallback Migration Job
+
+Run this only when the deployment init container did not complete migrations:
 
 ```powershell
-oc get events --sort-by=.lastTimestamp
+oc delete job docmanager-migrate
+oc apply -f openshift/docmanager-migrate-job.yaml
+oc wait --for=condition=complete job/docmanager-migrate --timeout=180s
+oc logs job/docmanager-migrate
 ```
+
+### Data Safety
+
+| Do Not Delete | Unless You Intend To Reset |
+| --- | --- |
+| `mysql-pvc` | Stored local database data |
+| `docmanager-media-pvc` | Uploaded media files |
+
