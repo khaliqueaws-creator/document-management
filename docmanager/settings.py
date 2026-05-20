@@ -153,6 +153,28 @@ STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", BASE_DIR / "media"))
 
+MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "20"))
+MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+DOCUMENTS_PER_PAGE = int(os.environ.get("DOCUMENTS_PER_PAGE", "10"))
+ALLOWED_DOCUMENT_EXTENSIONS = (
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".xlsx",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".bmp",
+)
+ALLOWED_SCANNED_IMAGE_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".tiff",
+    ".bmp",
+)
+
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_BROWSER_XSS_FILTER = True

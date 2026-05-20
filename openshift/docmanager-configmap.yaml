@@ -5,6 +5,8 @@ metadata:
 data:
   DJANGO_DEBUG: "False"
   DJANGO_SECURE_SSL_REDIRECT: "False"
+  MAX_UPLOAD_SIZE_MB: "20"
+  DOCUMENTS_PER_PAGE: "10"
   ALLOWED_HOSTS: "document-app-document-app.apps-crc.testing,localhost,127.0.0.1,docsdemo.khalique.net"
   MEDIA_ROOT: "/app/media"
   OKTA_DOMAIN: "https://trial-9422381.okta.com"

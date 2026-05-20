@@ -12,6 +12,12 @@
         Upload a scanned image to extract OCR text and metadata.
     </p>
 
+    {% if error %}
+    <div class="alert alert-error">
+        {{ error }}
+    </div>
+    {% endif %}
+
     <form method="post" enctype="multipart/form-data">
 
         {% csrf_token %}
@@ -23,7 +29,21 @@
             <input type="file"
                    name="file"
                    id="fileInput"
-                   accept=".jpg,.jpeg,.png">
+                   accept=".jpg,.jpeg,.png,.tiff,.bmp">
+
+        </div>
+
+        <div style="margin-bottom:20px;">
+
+            <label>OCR Language</label>
+
+            <select name="ocr_language">
+                {% for value, label in ocr_language_choices %}
+                    <option value="{{ value }}" {% if value == selected_ocr_language %}selected{% endif %}>
+                        {{ label }}
+                    </option>
+                {% endfor %}
+            </select>
 
         </div>
 

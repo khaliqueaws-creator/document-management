@@ -51,6 +51,12 @@ urlpatterns = [
         name="secure_document_view"
     ),
 
+    path(
+        "edit/<int:document_id>/",
+        views.edit_document_metadata,
+        name="edit_document_metadata"
+    ),
+
     # Delete document
     path(
         "delete/<int:document_id>/",

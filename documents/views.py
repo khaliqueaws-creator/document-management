@@ -4,10 +4,16 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import render, redirect
 from django.conf import settings
 from django.contrib.auth import logout as django_logout
+from django.core.exceptions import ValidationError
+from django.core.paginator import Paginator
 from django.db.models import Q
 from django.urls import reverse
 
-from .forms import DocumentForm
+from .forms import (
+    DocumentForm,
+    DocumentMetadataForm,
+    validate_uploaded_file,
+)
 from .models import Document
 from .auth import oauth
 from .permissions import (
@@ -23,6 +29,7 @@ import jwt
 from pypdf import PdfReader
 from docx import Document as DocxDocument
 from PIL import Image
+from PIL import ImageOps
 import pytesseract
 from pdf2image import convert_from_path
 from openpyxl import load_workbook
@@ -40,6 +47,58 @@ def get_temp_upload_path(filename):
         raise Http404("Temporary scanned file not found")
 
     return file_path
+
+
+def get_ocr_language_choices():
+    return Document.OCR_LANGUAGE_CHOICES
+
+
+def get_ocr_language_label(ocr_language):
+    return dict(Document.OCR_LANGUAGE_CHOICES).get(ocr_language, "English")
+
+
+def normalize_ocr_language(ocr_language):
+    allowed_languages = {
+        value for value, label in Document.OCR_LANGUAGE_CHOICES
+    }
+
+    if ocr_language in allowed_languages:
+        return ocr_language
+
+    return Document.OCR_LANGUAGE_ENGLISH
+
+
+def get_tesseract_language(ocr_language):
+    language_map = {
+        Document.OCR_LANGUAGE_ENGLISH: "eng",
+        Document.OCR_LANGUAGE_HINDI: "hin",
+        Document.OCR_LANGUAGE_URDU: "urd",
+    }
+
+    return language_map.get(
+        normalize_ocr_language(ocr_language),
+        "eng"
+    )
+
+
+def get_tesseract_config(ocr_language):
+    if normalize_ocr_language(ocr_language) == Document.OCR_LANGUAGE_URDU:
+        return "--psm 6 -c preserve_interword_spaces=1"
+
+    return "--psm 6"
+
+
+def preprocess_image_for_ocr(image):
+    image = ImageOps.exif_transpose(image)
+    image = image.convert("L")
+
+    width, height = image.size
+
+    if max(width, height) < 1800:
+        image = image.resize((width * 2, height * 2))
+
+    image = ImageOps.autocontrast(image)
+    return image.point(lambda pixel: 255 if pixel > 175 else 0)
 
 
 def login(request):
@@ -118,6 +177,9 @@ def upload_document(request):
 
         if form.is_valid():
             document = form.save(commit=False)
+            document.ocr_language = normalize_ocr_language(
+                document.ocr_language
+            )
 
             if not document.author:
                 document.author = (
@@ -129,7 +191,10 @@ def upload_document(request):
 
             try:
                 file_path = document.file.path
-                document.extracted_text = extract_text_from_file(file_path)
+                document.extracted_text = extract_text_from_file(
+                    file_path,
+                    document.ocr_language
+                )
                 document.save()
 
             except Exception as e:
@@ -152,11 +217,28 @@ def upload_scanned_image(request):
     if request.method == "POST":
 
         uploaded_file = request.FILES.get("file")
+        ocr_language = normalize_ocr_language(
+            request.POST.get("ocr_language")
+        )
 
         if not uploaded_file:
-            return render(request, "upload_scanned.html", {
-                "error": "Please select a file."
-            })
+            return render_upload_scanned(
+                request,
+                "Please select a file.",
+                ocr_language
+            )
+
+        try:
+            validate_uploaded_file(
+                uploaded_file,
+                settings.ALLOWED_SCANNED_IMAGE_EXTENSIONS
+            )
+        except ValidationError as error:
+            return render_upload_scanned(
+                request,
+                error.messages[0],
+                ocr_language
+            )
 
         temp_dir = os.path.join(settings.MEDIA_ROOT, "temp")
         os.makedirs(temp_dir, exist_ok=True)
@@ -172,20 +254,36 @@ def upload_scanned_image(request):
             kwargs={"filename": temp_filename}
         )
 
-        ocr_text = extract_text_from_file(temp_file_path)
+        ocr_text = extract_text_from_file(temp_file_path, ocr_language)
         metadata = extract_metadata_from_ocr(ocr_text)
 
         return render(request, "ocr_review.html", {
             "temp_filename": temp_filename,
             "temp_file_url": temp_file_url,
             "original_filename": uploaded_file.name,
+            "ocr_language": ocr_language,
+            "ocr_language_label": get_ocr_language_label(ocr_language),
             "ocr_text": ocr_text,
             "document_type": metadata.get("document_type", ""),
             "document_subtype": metadata.get("document_subtype", ""),
             
         })
 
-    return render(request, "upload_scanned.html")
+    return render_upload_scanned(request)
+
+
+def render_upload_scanned(
+    request,
+    error=None,
+    selected_ocr_language=Document.OCR_LANGUAGE_ENGLISH
+):
+    return render(request, "upload_scanned.html", {
+        "error": error,
+        "ocr_language_choices": get_ocr_language_choices(),
+        "selected_ocr_language": normalize_ocr_language(
+            selected_ocr_language
+        ),
+    })
 
 
 @okta_role_required(is_loader)
@@ -213,6 +311,9 @@ def confirm_document(request):
         temp_filename = request.POST.get("temp_filename")
         document_type = request.POST.get("document_type", "")
         document_subtype = request.POST.get("document_subtype", "")
+        ocr_language = normalize_ocr_language(
+            request.POST.get("ocr_language")
+        )
         ocr_text = request.POST.get("ocr_text", "")
 
         if not temp_filename:
@@ -225,7 +326,8 @@ def confirm_document(request):
 
         document = Document()
         document.document_type = document_type
-        document.document_subtype = document_subtype        
+        document.document_subtype = document_subtype
+        document.ocr_language = ocr_language
         document.extracted_text = ocr_text
 
         if not document.author:
@@ -266,7 +368,7 @@ def search_documents(request):
 
     if document_type:
         documents = documents.filter(document_type__icontains=document_type)
-    if document_type:
+    if document_subtype:
         documents = documents.filter(document_subtype__icontains=document_subtype)    
 
     if department:
@@ -283,8 +385,16 @@ def search_documents(request):
             Q(extracted_text__icontains=content)
         )
 
+    paginator = Paginator(documents, settings.DOCUMENTS_PER_PAGE)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    query_params = request.GET.copy()
+    query_params.pop("page", None)
+
     return render(request, "search.html", {
-        "documents": documents
+        "documents": page_obj,
+        "page_obj": page_obj,
+        "query_string": query_params.urlencode(),
+        "total_documents": paginator.count,
     })
 
 
@@ -306,6 +416,39 @@ def secure_document_view(request, document_id):
         as_attachment=False,
         filename=os.path.basename(file_path)
     )
+
+
+@okta_role_required(is_loader)
+def edit_document_metadata(request, document_id):
+    try:
+        document = Document.objects.get(id=document_id)
+
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    if request.method == "POST":
+        form = DocumentMetadataForm(request.POST, instance=document)
+
+        if form.is_valid():
+            form.save()
+            return redirect("search")
+
+    else:
+        form = DocumentMetadataForm(instance=document)
+
+    file_extension = os.path.splitext(document.file.name)[1].lower()
+
+    return render(request, "edit_metadata.html", {
+        "document": document,
+        "form": form,
+        "can_preview_inline": file_extension in [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".tiff",
+            ".bmp",
+        ],
+    })
 
 
 @okta_role_required(is_admin)
@@ -348,9 +491,11 @@ def extract_metadata_from_ocr(ocr_text):
     return metadata
 
 
-def extract_text_from_file(file_path):
+def extract_text_from_file(file_path, ocr_language=Document.OCR_LANGUAGE_ENGLISH):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
+    tesseract_language = get_tesseract_language(ocr_language)
+    tesseract_config = get_tesseract_config(ocr_language)
 
     if ext == ".pdf":
         reader = PdfReader(file_path)
@@ -363,9 +508,11 @@ def extract_text_from_file(file_path):
             images = convert_from_path(file_path)
 
             for image in images:
+                image = preprocess_image_for_ocr(image)
                 text += pytesseract.image_to_string(
                     image,
-                    lang="eng+hin+urd"
+                    lang=tesseract_language,
+                    config=tesseract_config
                 )
                 text += "\n"
 
@@ -394,12 +541,12 @@ def extract_text_from_file(file_path):
     elif ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
         image = Image.open(file_path)
 
-        image = image.convert("L")
+        image = preprocess_image_for_ocr(image)
 
         text = pytesseract.image_to_string(
             image,
-            lang="eng+hin+urd",
-            config="--psm 6"
+            lang=tesseract_language,
+            config=tesseract_config
         )
 
     return text

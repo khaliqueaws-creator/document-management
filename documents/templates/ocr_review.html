@@ -9,6 +9,7 @@
 
     <input type="hidden" name="temp_filename" value="{{ temp_filename }}">
     <input type="hidden" name="original_filename" value="{{ original_filename }}">
+    <input type="hidden" name="ocr_language" value="{{ ocr_language }}">
 
     <div style="
         display:flex;
@@ -71,6 +72,17 @@
 						  margin-top:5px; 
 						  margin-bottom:20px;
 				   ">	   
+            <label>OCR Language</label><br>
+            <input type="text"
+                   value="{{ ocr_language_label }}"
+                   readonly
+                   style="
+                        width:100%;
+                        padding:8px;
+                        margin-top:5px;
+                        margin-bottom:20px;
+                   ">
+
             <h3>OCR Text</h3>
 
             <textarea name="ocr_text"

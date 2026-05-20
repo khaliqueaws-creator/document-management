@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Metadata{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Edit Metadata</h2>
+        <p class="note">{{ document.file.name }}</p>
+    </div>
+</div>
+
+<div class="edit-layout">
+    <div>
+        <form method="post">
+            {% csrf_token %}
+
+            {{ form.as_p }}
+
+            <button type="submit">
+                Save Metadata
+            </button>
+
+            <a href="{% url 'search' %}" class="secondary-action">
+                Cancel
+            </a>
+        </form>
+    </div>
+
+    <aside class="document-preview-panel">
+        <h3>Document Preview</h3>
+
+        {% if can_preview_inline %}
+            <img src="{% url 'secure_document_view' document.id %}"
+                 alt="Document Preview"
+                 class="document-preview-image">
+        {% else %}
+            <p class="note">
+                Inline preview is not available for this file type.
+            </p>
+        {% endif %}
+
+        <a href="{% url 'secure_document_view' document.id %}"
+           target="_blank"
+           rel="noopener"
+           class="secondary-action open-document-link">
+            Open Document
+        </a>
+    </aside>
+</div>
+
+{% endblock %}

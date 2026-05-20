@@ -8,7 +8,7 @@
         body {
             margin: 0;
             font-family: "IBM Plex Sans", Arial, sans-serif;
-            background: #f4f4f4;
+            background: #f6f7f8;
             color: #161616;
         }
 
@@ -17,8 +17,8 @@
         ========================== */
 
         .topbar {
-            height: 50px;
-            background: #161616;
+            min-height: 56px;
+            background: #1f2933;
             color: white;
 
             display: flex;
@@ -54,8 +54,8 @@
         ========================== */
 
         .sidebar {
-            width: 230px;
-            background: #262626;
+            width: 240px;
+            background: #24313d;
             color: white;
             padding-top: 20px;
         }
@@ -75,12 +75,12 @@
         }
 
         .sidebar a:hover {
-            background: #393939;
+            background: #334554;
             color: white;
         }
 
         .sidebar a.active {
-            background: #393939;
+            background: #334554;
             color: white;
             border-left: 4px solid #0f62fe;
         }
@@ -96,11 +96,20 @@
 
         .page-card {
             background: white;
-            border: 1px solid #d0d0d0;
+            border: 1px solid #dde1e6;
+            border-radius: 6px;
 
             padding: 24px;
 
-            box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 20px;
         }
 
         h2 {
@@ -121,6 +130,19 @@
         .note {
             color: #525252;
             margin-bottom: 20px;
+        }
+
+        .alert {
+            border: 1px solid;
+            padding: 12px 14px;
+            margin-bottom: 18px;
+            border-radius: 4px;
+        }
+
+        .alert-error {
+            background: #fff1f1;
+            border-color: #da1e28;
+            color: #750e13;
         }
 
         label {
@@ -177,6 +199,17 @@
             background: #0353e9;
         }
 
+        .secondary-action {
+            display: inline-block;
+            margin-left: 12px;
+            color: #0f62fe;
+            text-decoration: none;
+        }
+
+        .secondary-action:hover {
+            text-decoration: underline;
+        }
+
         /* =========================
            SEARCH PAGE
         ========================== */
@@ -185,38 +218,72 @@
 
             display: grid;
 
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
 
             gap: 12px;
 
             margin-bottom: 25px;
+            align-items: end;
+        }
+
+        .search-reset {
+            margin: 0;
+            padding: 10px 0;
+        }
+
+        .table-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .table-toolbar button {
+            margin-top: 0;
+            min-width: 80px;
+        }
+
+        .table-toolbar button:disabled {
+            background: #c6c6c6;
+            color: #525252;
+            cursor: not-allowed;
         }
 
         /* =========================
            TABLES
         ========================== */
 
+        .table-wrap {
+            overflow-x: auto;
+            border: 1px solid #dde1e6;
+            border-radius: 6px;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
+            background: white;
         }
 
         th {
 
-            background: #2c3e50;
+            background: #f2f4f8;
 
-            color: white;
+            color: #343a3f;
 
-            padding: 10px;
+            padding: 12px;
 
             text-align: left;
+            font-size: 13px;
+            text-transform: uppercase;
         }
 
         td {
 
-            padding: 10px;
+            padding: 12px;
 
-            border-bottom: 1px solid #ddd;
+            border-bottom: 1px solid #e0e0e0;
+            vertical-align: top;
         }
 
         table a {
@@ -228,6 +295,16 @@
             text-decoration: underline;
         }
 
+        .select-column {
+            width: 72px;
+            text-align: center;
+        }
+
+        .select-column input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+        }
+
         .empty {
 
             text-align: center;
@@ -235,6 +312,71 @@
             color: #777;
 
             padding: 20px;
+        }
+
+        .primary-text {
+            font-weight: 600;
+            color: #161616;
+        }
+
+        .muted-text {
+            color: #6f6f6f;
+            font-size: 13px;
+            margin-top: 3px;
+        }
+
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin-top: 20px;
+        }
+
+        .pagination a,
+        .pagination span {
+            border: 1px solid #c6c6c6;
+            padding: 8px 12px;
+            text-decoration: none;
+            color: #0f62fe;
+            background: white;
+        }
+
+        .pagination span {
+            color: #8d8d8d;
+            background: #f4f4f4;
+        }
+
+        .edit-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+            gap: 28px;
+            align-items: start;
+        }
+
+        .document-preview-panel {
+            border: 1px solid #dde1e6;
+            border-radius: 6px;
+            padding: 18px;
+            background: #f8f9fa;
+        }
+
+        .document-preview-panel h3 {
+            margin-top: 0;
+        }
+
+        .document-preview-image {
+            display: block;
+            width: 100%;
+            max-height: 520px;
+            object-fit: contain;
+            border: 1px solid #dde1e6;
+            background: white;
+        }
+
+        .open-document-link {
+            margin-top: 14px;
+            margin-left: 0;
         }
 
         /* =========================
@@ -305,16 +447,15 @@
             }
 
             table {
-
-                display: block;
-
-                overflow-x: auto;
-
                 white-space: nowrap;
             }
 
             .container {
                 max-width: 100%;
+            }
+
+            .edit-layout {
+                grid-template-columns: 1fr;
             }
         }
 
@@ -350,17 +491,15 @@
                 Search Documents
             </a>
 
-            <a href="/upload/"
-               class="{% if request.path == '/upload/' %}active{% endif %}">
-                Upload Document
-            </a>
 			{% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
-			<a href="{% url 'upload' %}">
-				<button>Upload Document</button>
+			<a href="{% url 'upload' %}"
+               class="{% if request.path == '/upload/' %}active{% endif %}">
+				Upload Document
 			</a>
 
-			<a href="{% url 'upload_scanned_image' %}">
-				<button>Upload Scanned Image</button>
+			<a href="{% url 'upload_scanned_image' %}"
+               class="{% if request.path == '/upload-scanned/' %}active{% endif %}">
+				Upload Scanned Image
 			</a>
 
 			{% endif %}

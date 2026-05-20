@@ -2,8 +2,23 @@ from django.db import models
 
 
 class Document(models.Model):
+    OCR_LANGUAGE_ENGLISH = "english"
+    OCR_LANGUAGE_HINDI = "hindi"
+    OCR_LANGUAGE_URDU = "urdu"
+
+    OCR_LANGUAGE_CHOICES = [
+        (OCR_LANGUAGE_ENGLISH, "English"),
+        (OCR_LANGUAGE_HINDI, "Hindi"),
+        (OCR_LANGUAGE_URDU, "Urdu"),
+    ]
+
     document_type = models.CharField(max_length=100, blank=True)
     document_subtype = models.CharField(max_length=100,blank=True)
+    ocr_language = models.CharField(
+        max_length=20,
+        choices=OCR_LANGUAGE_CHOICES,
+        default=OCR_LANGUAGE_ENGLISH,
+    )
     ocr_text = models.TextField(blank=True)	
     department = models.CharField(max_length=100)
     author = models.CharField(max_length=100, blank=True)
