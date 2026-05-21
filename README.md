@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, and local AI metadata suggestions through Ollama.
+A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, and AI metadata suggestions through a switchable Gemini or Ollama provider.
 
 The public demo path used during development is:
 
@@ -34,7 +34,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - View audit events through an admin-only audit page.
 - Authenticate users through Okta OIDC.
 - Authorize access through Okta group-based application roles.
-- Generate AI metadata suggestions through Ollama.
+- Generate AI metadata suggestions through Ollama or Gemini.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
 
@@ -51,7 +51,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Document parsing | pypdf, python-docx, openpyxl |
 | Authentication | Okta OIDC through Authlib |
 | Authorization | Okta groups stored in Django session |
-| AI metadata | Ollama API with `qwen2.5:0.5b` |
+| AI metadata | Switchable Ollama or Gemini provider |
 | Container platform | OpenShift CRC |
 | Container image | Docker build through OpenShift binary build |
 | Public demo access | Cloudflare Tunnel |
@@ -68,11 +68,11 @@ Browser
 
 Django
   -> document media PVC
-  -> Ollama Service
-  -> Ollama model PVC
+  -> Gemini API over HTTPS
+  -> or Ollama Service and Ollama model PVC
 ```
 
-The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Ollama runs as a separate deployment and serves the local model over the internal OpenShift service name `http://ollama:11434`.
+The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Gemini is the preferred external provider for higher-quality metadata suggestions. Ollama remains available as a local/private fallback and serves the local model over the internal OpenShift service name `http://ollama:11434`.
 
 ## Role Model
 
@@ -137,14 +137,15 @@ Implementation method:
 - Used OpenShift PVCs for database and uploaded media persistence.
 - Used an init container to run `python manage.py migrate --noinput` before the web container starts.
 
-### Phase 3: Local AI Metadata Suggestions With Ollama
+### Phase 3: AI Metadata Suggestions With Gemini And Ollama
 
-The third phase added local AI-assisted metadata generation.
+The third phase added AI-assisted metadata generation with a provider switch.
 
 Implemented:
 
 - Ollama deployment, service, model PVC, and model pull job.
-- Django settings for Ollama URL, model, timeout, context, and prompt text limit.
+- Gemini API support through a provider toggle.
+- Django settings for provider, Ollama URL/model, Gemini URL/model/API key, timeout, context, and prompt text limit.
 - AI metadata fields on `Document`:
   - `ai_document_type`
   - `ai_department`
@@ -153,12 +154,13 @@ Implemented:
   - `ai_suggestion_status`
   - `ai_suggested_at`
   - `ai_error`
-- Metadata suggestion helper in `documents/ai_metadata.py`.
+- Metadata suggestion helper in `documents/ai_metadata.py` with `ollama` and `gemini` provider paths.
 - Upload-time AI suggestion generation.
 - Review panel on the edit metadata page.
 - Accept, reject, and regenerate actions.
 - Better Ollama error reporting for HTTP 500 responses.
-- CRC-friendly model selection with `qwen2.5:0.5b`.
+- CRC-friendly Ollama model selection with `qwen2.5:0.5b`.
+- Gemini provider validation with `gemini-2.5-flash`.
 
 Implementation method:
 
@@ -166,6 +168,10 @@ Implementation method:
 - Limited prompt input with `AI_METADATA_MAX_CHARS=2500`.
 - Limited model context with `OLLAMA_NUM_CTX=1024`.
 - Kept Ollama internal only, accessed through `http://ollama:11434`.
+- Added `AI_METADATA_PROVIDER` so deployments can switch between local Ollama and external Gemini without code changes.
+- Stored `GEMINI_API_KEY` in the OpenShift Secret template.
+- Use Gemini for better extraction quality when external API usage is acceptable.
+- Use Ollama when local/private processing is preferred.
 - Used a separate model pull job so model downloads are explicit and repeatable.
 - Set Ollama deployment strategy to `Recreate` so CRC does not try to run old and new Ollama pods at the same time.
 - Kept AI suggestions staged separately from official metadata until a loader accepts them.
@@ -176,8 +182,8 @@ Current behavior:
 
 1. A loader uploads a document.
 2. Django saves the file and extracts text.
-3. If `AUTO_AI_METADATA_ON_UPLOAD=True`, Django sends extracted text to Ollama.
-4. Ollama returns suggested JSON metadata.
+3. If `AUTO_AI_METADATA_ON_UPLOAD=True`, Django sends extracted text to the configured provider.
+4. The provider returns suggested JSON metadata.
 5. Django stores the AI suggestions separately from the official metadata.
 6. The user is redirected to the edit metadata page.
 7. The user can accept, reject, or regenerate suggestions.
@@ -201,16 +207,34 @@ Runtime values are configured in `openshift/docmanager-configmap.yaml`.
 
 | Key | Purpose | Current Default |
 | --- | --- | --- |
+| `AI_METADATA_PROVIDER` | AI provider to use: `ollama` or `gemini` | `ollama` in repo, `gemini` in current demo deployment |
 | `OLLAMA_BASE_URL` | Internal Ollama API endpoint | `http://ollama:11434` |
 | `OLLAMA_MODEL` | Local model used for suggestions | `qwen2.5:0.5b` |
 | `OLLAMA_TIMEOUT_SECONDS` | HTTP timeout for model generation | `90` |
 | `OLLAMA_NUM_CTX` | Ollama context size | `1024` |
+| `GEMINI_BASE_URL` | Gemini API endpoint | `https://generativelanguage.googleapis.com` |
+| `GEMINI_MODEL` | Gemini model used for suggestions | `gemini-2.5-flash` |
+| `GEMINI_API_KEY` | Gemini API key, stored in Secret | empty placeholder |
 | `AI_METADATA_MAX_CHARS` | Max extracted text sent to AI | `2500` |
 | `AUTO_AI_METADATA_ON_UPLOAD` | Generate suggestions during upload | `True` |
 | `ALLOWED_HOSTS` | Django allowed hosts | includes `docsdemo.khalique.net` |
 | `OKTA_CALLBACK_URL` | OIDC callback URL | `https://docsdemo.khalique.net/oidc/callback` |
 
 Secrets live in `openshift/docmanager-secret-template.yaml`, but real secret values should not be committed.
+
+To use Gemini, set `GEMINI_API_KEY` in the OpenShift Secret and change:
+
+```yaml
+AI_METADATA_PROVIDER: "gemini"
+```
+
+To use local Ollama, change it back to:
+
+```yaml
+AI_METADATA_PROVIDER: "ollama"
+```
+
+Gemini sends extracted document text to Google. Ollama keeps the text inside the local environment.
 
 ## Deployment Summary
 
@@ -272,6 +296,8 @@ oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
 - Reapply the ConfigMap after changing runtime values.
 - Restart `document-app` after ConfigMap changes so the pod reads new environment variables.
 - Recreate `ollama-pull-model` after changing `OLLAMA_MODEL`.
+- Use `oc set env secret/docmanager-secrets GEMINI_API_KEY="..."` to update only the Gemini key without overwriting database secrets.
+- Avoid applying the full secret template unless it contains real local values for every key.
 - Do not delete `mysql-pvc` unless intentionally resetting database data.
 - Do not delete `docmanager-media-pvc` unless intentionally deleting uploaded files.
 - `phi3` was tested but needed more memory than available in CRC; `qwen2.5:0.5b` is the current CRC-friendly model.
@@ -302,6 +328,8 @@ oc get pods
 oc logs deployment/document-app --tail=100
 oc logs deployment/ollama --tail=100
 oc exec deployment/document-app -- printenv OLLAMA_MODEL
+oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+oc exec deployment/document-app -- printenv GEMINI_MODEL
 oc exec deployment/ollama -- ollama list
 ```
 

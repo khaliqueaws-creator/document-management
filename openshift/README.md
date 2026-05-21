@@ -7,6 +7,8 @@ This runbook reflects the current implementation:
 - Django runs as `deployment/document-app` with Gunicorn.
 - MySQL runs as `deployment/mysql`.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
+- Gemini can be used instead of Ollama by setting `AI_METADATA_PROVIDER=gemini`.
+- Gemini is the preferred provider for the current demo because it produces better metadata suggestions than the tiny CRC-friendly Ollama model.
 - The current CRC-friendly AI model is `qwen2.5:0.5b`.
 - AI metadata suggestions are generated during upload when `AUTO_AI_METADATA_ON_UPLOAD` is enabled.
 - The public demo URL is `https://docsdemo.khalique.net/` through Cloudflare Tunnel, while the OpenShift route host remains `document-app-document-app.apps-crc.testing`.
@@ -61,7 +63,7 @@ Then update:
 | File | What To Check |
 | --- | --- |
 | `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database name, user, passwords, host, and port. |
-| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, Ollama settings, and AI upload behavior. |
+| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, provider toggle, Ollama settings, Gemini settings, and AI upload behavior. |
 | `openshift/docmanager-deployment.yaml` | Probe `Host` header. It must also appear in `ALLOWED_HOSTS`. |
 
 Current public URL values:
@@ -216,6 +218,9 @@ Confirm the Django pod reads the expected AI settings:
 ```powershell
 oc exec deployment/document-app -- printenv OLLAMA_BASE_URL
 oc exec deployment/document-app -- printenv OLLAMA_MODEL
+oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+oc exec deployment/document-app -- printenv GEMINI_BASE_URL
+oc exec deployment/document-app -- printenv GEMINI_MODEL
 oc exec deployment/document-app -- printenv AI_METADATA_MAX_CHARS
 oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
 ```
@@ -225,6 +230,9 @@ Expected important values:
 ```text
 http://ollama:11434
 qwen2.5:0.5b
+gemini
+https://generativelanguage.googleapis.com
+gemini-2.5-flash
 2500
 True
 ```
@@ -233,7 +241,7 @@ Then upload a document through the app. The current workflow is:
 
 1. Upload document.
 2. Django extracts text.
-3. Django calls Ollama for suggested metadata.
+3. Django calls the configured provider for suggested metadata.
 4. The app redirects to the edit metadata page.
 5. The loader reviews, accepts, rejects, or regenerates the AI suggestion.
 
@@ -278,8 +286,89 @@ Examples that need this:
 - `OLLAMA_MODEL`.
 - `OLLAMA_TIMEOUT_SECONDS`.
 - `OLLAMA_NUM_CTX`.
+- `AI_METADATA_PROVIDER`.
+- `GEMINI_BASE_URL`.
+- `GEMINI_MODEL`.
 - `AI_METADATA_MAX_CHARS`.
 - `AUTO_AI_METADATA_ON_UPLOAD`.
+
+### Gemini Provider Setup
+
+Do not apply the whole secret template just to update Gemini. That can overwrite database credentials if the local file contains placeholders.
+
+Set the Gemini API key directly on the existing Secret:
+
+```powershell
+oc set env secret/docmanager-secrets GEMINI_API_KEY="YOUR_REAL_GEMINI_API_KEY"
+```
+
+The template contains this placeholder for rebuild-from-scratch cases:
+
+```yaml
+GEMINI_API_KEY: "<your-real-gemini-api-key>"
+```
+
+Current Gemini ConfigMap values:
+
+```yaml
+AI_METADATA_PROVIDER: "gemini"
+GEMINI_BASE_URL: "https://generativelanguage.googleapis.com"
+GEMINI_MODEL: "gemini-2.5-flash"
+```
+
+If `AI_METADATA_PROVIDER` is not already `gemini`, switch with a patch file to avoid PowerShell quoting problems:
+
+```powershell
+@'
+{
+  "data": {
+    "AI_METADATA_PROVIDER": "gemini"
+  }
+}
+'@ | Set-Content -Encoding utf8 ai-provider-patch.json
+
+oc patch configmap docmanager-config --type=merge --patch-file ai-provider-patch.json
+Remove-Item ai-provider-patch.json
+
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+Verify:
+
+```powershell
+oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+oc exec deployment/document-app -- printenv GEMINI_MODEL
+oc exec deployment/document-app -- printenv GEMINI_BASE_URL
+```
+
+### Switch Back To Ollama
+
+Use this when you want local/private AI processing:
+
+```powershell
+@'
+{
+  "data": {
+    "AI_METADATA_PROVIDER": "ollama"
+  }
+}
+'@ | Set-Content -Encoding utf8 ai-provider-patch.json
+
+oc patch configmap docmanager-config --type=merge --patch-file ai-provider-patch.json
+Remove-Item ai-provider-patch.json
+
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+Make sure Ollama is running and the model is available:
+
+```powershell
+oc rollout status deployment/ollama
+oc exec deployment/ollama -- ollama list
+oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
+```
 
 ### Ollama Model Changes
 
@@ -407,6 +496,10 @@ oc get secret docmanager-secrets
 | Migration files changed | Rebuild the app image before restarting the deployment. |
 | Upload code changes do not appear in the browser | Rebuild with `oc start-build document-app --from-dir=. --follow`, then restart `deployment/document-app`. |
 | AI suggestions are not generated during upload | Confirm `AUTO_AI_METADATA_ON_UPLOAD=True`, restart `document-app`, and check `deployment/document-app` logs. |
+| Gemini says API key is not configured | Add `GEMINI_API_KEY` to `docmanager-secrets`, then restart `deployment/document-app`. |
+| Gemini returns HTTP 403 or 400 | Confirm the API key is valid and `GEMINI_MODEL` is available in your Gemini models list. |
+| PowerShell fails on `oc patch ... -p '{"data":...}'` | Use a temporary JSON patch file with `--patch-file`. |
+| Applying the secret template breaks MySQL login | Restore DB secrets or reset MySQL; prefer `oc set env secret/docmanager-secrets GEMINI_API_KEY=...` for Gemini updates. |
 | Django still uses the old Ollama model | Restart `deployment/document-app` after applying the ConfigMap. |
 | Ollama pull job says `couldn't find key OLLAMA_MODEL in ConfigMap` | Reapply `openshift/docmanager-configmap.yaml`, then delete and recreate `job/ollama-pull-model`. |
 | Ollama pod says `Insufficient memory` or `model requires more system memory` | Use the smaller default `qwen2.5:0.5b`, reapply the config map and Ollama deployment, then recreate `job/ollama-pull-model`. |
@@ -428,6 +521,9 @@ oc get route document-app -o jsonpath="{.spec.host}"
 ```powershell
 oc exec deployment/document-app -- printenv OLLAMA_BASE_URL
 oc exec deployment/document-app -- printenv OLLAMA_MODEL
+oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+oc exec deployment/document-app -- printenv GEMINI_BASE_URL
+oc exec deployment/document-app -- printenv GEMINI_MODEL
 oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
 oc exec deployment/ollama -- ollama list
 oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"

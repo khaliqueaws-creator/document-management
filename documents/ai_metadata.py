@@ -47,21 +47,23 @@ def clean_suggestion_value(value, max_length=None):
     return value
 
 
-def parse_ollama_json_response(response_text):
+def parse_metadata_json_response(response_text):
     response_text = (response_text or "").strip()
 
     if not response_text:
-        raise MetadataSuggestionError("Ollama returned an empty response.")
+        raise MetadataSuggestionError("AI provider returned an empty response.")
 
     try:
         parsed = json.loads(response_text)
     except json.JSONDecodeError as error:
         raise MetadataSuggestionError(
-            "Ollama returned invalid JSON."
+            "AI provider returned invalid JSON."
         ) from error
 
     if not isinstance(parsed, dict):
-        raise MetadataSuggestionError("Ollama response was not a JSON object.")
+        raise MetadataSuggestionError(
+            "AI provider response was not a JSON object."
+        )
 
     return {
         "document_type": clean_suggestion_value(
@@ -80,7 +82,7 @@ def parse_ollama_json_response(response_text):
     }
 
 
-def build_ollama_error_message(response):
+def build_provider_error_message(provider_name, response):
     response_text = response.text.strip()
 
     if len(response_text) > 500:
@@ -88,11 +90,35 @@ def build_ollama_error_message(response):
 
     if response_text:
         return (
-            f"Ollama returned HTTP {response.status_code}: "
+            f"{provider_name} returned HTTP {response.status_code}: "
             f"{response_text}"
         )
 
-    return f"Ollama returned HTTP {response.status_code}."
+    return f"{provider_name} returned HTTP {response.status_code}."
+
+
+def parse_gemini_response_text(payload):
+    candidates = payload.get("candidates") or []
+
+    if not candidates:
+        raise MetadataSuggestionError("Gemini returned no candidates.")
+
+    parts = (
+        candidates[0]
+        .get("content", {})
+        .get("parts", [])
+    )
+
+    response_text = "".join(
+        part.get("text", "")
+        for part in parts
+        if isinstance(part, dict)
+    ).strip()
+
+    if not response_text:
+        raise MetadataSuggestionError("Gemini returned an empty response.")
+
+    return response_text
 
 
 def suggest_metadata_with_ollama(text):
@@ -125,7 +151,9 @@ def suggest_metadata_with_ollama(text):
         ) from error
 
     if response.status_code >= 400:
-        raise MetadataSuggestionError(build_ollama_error_message(response))
+        raise MetadataSuggestionError(
+            build_provider_error_message("Ollama", response)
+        )
 
     try:
         payload = response.json()
@@ -136,4 +164,75 @@ def suggest_metadata_with_ollama(text):
 
     response_text = payload.get("response", "")
 
-    return parse_ollama_json_response(response_text)
+    return parse_metadata_json_response(response_text)
+
+
+def suggest_metadata_with_gemini(text):
+    text = (text or "").strip()
+
+    if not text:
+        raise MetadataSuggestionError(
+            "No extracted text is available for metadata suggestions."
+        )
+
+    if not settings.GEMINI_API_KEY:
+        raise MetadataSuggestionError("GEMINI_API_KEY is not configured.")
+
+    prompt = build_metadata_prompt(text[:settings.AI_METADATA_MAX_CHARS])
+    model = settings.GEMINI_MODEL
+    url = (
+        f"{settings.GEMINI_BASE_URL.rstrip('/')}/v1beta/models/"
+        f"{model}:generateContent"
+    )
+
+    try:
+        response = requests.post(
+            url,
+            params={"key": settings.GEMINI_API_KEY},
+            json={
+                "contents": [
+                    {
+                        "parts": [
+                            {"text": prompt},
+                        ],
+                    },
+                ],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.2,
+                },
+            },
+            timeout=settings.OLLAMA_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as error:
+        raise MetadataSuggestionError(
+            f"Unable to reach Gemini: {error}"
+        ) from error
+
+    if response.status_code >= 400:
+        raise MetadataSuggestionError(
+            build_provider_error_message("Gemini", response)
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise MetadataSuggestionError(
+            "Gemini returned a non-JSON API response."
+        ) from error
+
+    return parse_metadata_json_response(parse_gemini_response_text(payload))
+
+
+def suggest_metadata(text):
+    provider = settings.AI_METADATA_PROVIDER
+
+    if provider == "ollama":
+        return suggest_metadata_with_ollama(text)
+
+    if provider == "gemini":
+        return suggest_metadata_with_gemini(text)
+
+    raise MetadataSuggestionError(
+        f"Unsupported AI metadata provider: {provider}"
+    )

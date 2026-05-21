@@ -16,7 +16,7 @@ from .forms import (
     DocumentMetadataForm,
     validate_uploaded_file,
 )
-from .ai_metadata import MetadataSuggestionError, suggest_metadata_with_ollama
+from .ai_metadata import MetadataSuggestionError, suggest_metadata
 from .models import AuditEvent, Document
 from .auth import oauth
 from .permissions import (
@@ -99,7 +99,7 @@ def store_ai_metadata_suggestions(document):
         ]
     )
 
-    suggestions = suggest_metadata_with_ollama(
+    suggestions = suggest_metadata(
         get_ai_metadata_source_text(document)
     )
 

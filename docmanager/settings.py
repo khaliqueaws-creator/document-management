@@ -158,10 +158,17 @@ MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE_BYTES
 FILE_UPLOAD_MAX_MEMORY_SIZE = min(MAX_UPLOAD_SIZE_BYTES, 5 * 1024 * 1024)
 DOCUMENTS_PER_PAGE = int(os.environ.get("DOCUMENTS_PER_PAGE", "10"))
+AI_METADATA_PROVIDER = os.environ.get("AI_METADATA_PROVIDER", "ollama").lower()
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:0.5b")
 OLLAMA_TIMEOUT_SECONDS = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "90"))
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "1024"))
+GEMINI_BASE_URL = os.environ.get(
+    "GEMINI_BASE_URL",
+    "https://generativelanguage.googleapis.com",
+)
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 AI_METADATA_MAX_CHARS = int(os.environ.get("AI_METADATA_MAX_CHARS", "2500"))
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",
