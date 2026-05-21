@@ -2,6 +2,15 @@
 
 Deploy, restart, and troubleshoot the Django document manager on local OpenShift CRC.
 
+This runbook reflects the current implementation:
+
+- Django runs as `deployment/document-app` with Gunicorn.
+- MySQL runs as `deployment/mysql`.
+- Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
+- The current CRC-friendly AI model is `qwen2.5:0.5b`.
+- AI metadata suggestions are generated during upload when `AUTO_AI_METADATA_ON_UPLOAD` is enabled.
+- The public demo URL is `https://docsdemo.khalique.net/` through Cloudflare Tunnel, while the OpenShift route host remains `document-app-document-app.apps-crc.testing`.
+
 > [!IMPORTANT]
 > Do not commit real production secret values to GitHub. If `openshift/docmanager-secret-template.yaml` contains live values, keep it local or replace them with placeholders before committing.
 
@@ -10,8 +19,9 @@ Deploy, restart, and troubleshoot the Django document manager on local OpenShift
 | Section | Use When |
 | --- | --- |
 | [A. Rebuild From Scratch](#a-rebuild-from-scratch) | CRC was recreated, the project was removed, or you want a clean local deployment. |
-| [B. Stop CRC And Start CRC Then Check App](#b-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
-| [C. Some Troubleshooting Tips](#c-some-troubleshooting-tips) | Pods, routes, migrations, probes, or login checks are failing. |
+| [B. Normal Code Or Config Redeploy](#b-normal-code-or-config-redeploy) | You changed Django code, templates, migrations, ConfigMap values, or Ollama model settings. |
+| [C. Stop CRC And Start CRC Then Check App](#c-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
+| [D. Some Troubleshooting Tips](#d-some-troubleshooting-tips) | Pods, routes, migrations, probes, Ollama, or login checks are failing. |
 
 ## A. Rebuild From Scratch
 
@@ -51,8 +61,16 @@ Then update:
 | File | What To Check |
 | --- | --- |
 | `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database name, user, passwords, host, and port. |
-| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, and `ALLOWED_HOSTS`. |
+| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, Ollama settings, and AI upload behavior. |
 | `openshift/docmanager-deployment.yaml` | Probe `Host` header. It must also appear in `ALLOWED_HOSTS`. |
+
+Current public URL values:
+
+| Config Key | Expected Value |
+| --- | --- |
+| `OKTA_CALLBACK_URL` | `https://docsdemo.khalique.net/oidc/callback` |
+| `OKTA_LOGOUT_REDIRECT_URL` | `https://docsdemo.khalique.net/` |
+| `ALLOWED_HOSTS` | Must include `docsdemo.khalique.net` and `document-app-document-app.apps-crc.testing` |
 
 ### 3. Build The App Image
 
@@ -102,7 +120,47 @@ oc rollout status deployment/document-app
 
 The `document-app` deployment runs migrations automatically in an init container before Gunicorn starts.
 
-### 5. Verify The App
+> [!NOTE]
+> The Django image must already exist before `deployment/document-app` can start. If the deployment shows `ImagePullBackOff` or `InvalidImageName`, rebuild the image with `oc start-build document-app --from-dir=. --follow`.
+
+### 5. Apply Ollama Resources
+
+Apply Ollama after the config map exists. The model pull job reads `OLLAMA_MODEL` from `openshift/docmanager-configmap.yaml`.
+
+Current Ollama implementation choices:
+
+| Item | Current Value | Reason |
+| --- | --- | --- |
+| Model | `qwen2.5:0.5b` | Fits local CRC memory better than `phi3`. |
+| Deployment strategy | `Recreate` | Prevents CRC from trying to run old and new Ollama pods at the same time during rollout. |
+| Memory request | `256Mi` | Keeps the pod schedulable on constrained CRC. |
+| Memory limit | `2Gi` | Gives the small model enough runtime headroom. |
+| Model storage | `ollama-models-pvc` | Keeps downloaded models across pod restarts. |
+
+```powershell
+oc apply -f openshift/ollama-pvc.yaml
+oc apply -f openshift/ollama-deployment.yaml
+oc rollout status deployment/ollama
+oc delete job ollama-pull-model --ignore-not-found
+oc apply -f openshift/ollama-model-pull-job.yaml
+oc wait --for=condition=complete job/ollama-pull-model --timeout=600s
+```
+
+If you change `OLLAMA_MODEL`, delete and recreate the pull job:
+
+```powershell
+oc delete job ollama-pull-model
+oc apply -f openshift/ollama-model-pull-job.yaml
+```
+
+Check the model list:
+
+```powershell
+oc exec deployment/ollama -- ollama list
+oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
+```
+
+### 6. Verify The App
 
 Check OpenShift objects:
 
@@ -151,7 +209,119 @@ Browser URL:
 https://docsdemo.khalique.net/login/
 ```
 
-## B. Stop CRC And Start CRC Then Check App
+### 7. Verify AI Metadata Suggestions
+
+Confirm the Django pod reads the expected AI settings:
+
+```powershell
+oc exec deployment/document-app -- printenv OLLAMA_BASE_URL
+oc exec deployment/document-app -- printenv OLLAMA_MODEL
+oc exec deployment/document-app -- printenv AI_METADATA_MAX_CHARS
+oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
+```
+
+Expected important values:
+
+```text
+http://ollama:11434
+qwen2.5:0.5b
+2500
+True
+```
+
+Then upload a document through the app. The current workflow is:
+
+1. Upload document.
+2. Django extracts text.
+3. Django calls Ollama for suggested metadata.
+4. The app redirects to the edit metadata page.
+5. The loader reviews, accepts, rejects, or regenerates the AI suggestion.
+
+Watch logs while testing:
+
+```powershell
+oc logs deployment/document-app -f
+oc logs deployment/ollama -f
+```
+
+## B. Normal Code Or Config Redeploy
+
+Use this section during normal development.
+
+### Django Code, Template, Model, Or Migration Changes
+
+Rebuild the application image first. OpenShift is running the last built image, not your working directory.
+
+```powershell
+oc start-build document-app --from-dir=. --follow
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+If migrations changed, the `document-app` init container runs them automatically before Gunicorn starts.
+
+### ConfigMap Changes
+
+For changes to `openshift/docmanager-configmap.yaml`, apply the ConfigMap and restart Django:
+
+```powershell
+oc apply -f openshift/docmanager-configmap.yaml
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+Examples that need this:
+
+- Okta URLs.
+- `ALLOWED_HOSTS`.
+- `OLLAMA_BASE_URL`.
+- `OLLAMA_MODEL`.
+- `OLLAMA_TIMEOUT_SECONDS`.
+- `OLLAMA_NUM_CTX`.
+- `AI_METADATA_MAX_CHARS`.
+- `AUTO_AI_METADATA_ON_UPLOAD`.
+
+### Ollama Model Changes
+
+If `OLLAMA_MODEL` changes, apply the ConfigMap, recreate the pull job, and restart Django:
+
+```powershell
+oc apply -f openshift/docmanager-configmap.yaml
+
+oc delete job ollama-pull-model --ignore-not-found
+oc apply -f openshift/ollama-model-pull-job.yaml
+oc logs job/ollama-pull-model -f
+
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+```
+
+Verify:
+
+```powershell
+oc exec deployment/ollama -- ollama list
+oc exec deployment/document-app -- printenv OLLAMA_MODEL
+```
+
+### Ollama Resource Changes
+
+If `openshift/ollama-deployment.yaml` changes:
+
+```powershell
+oc apply -f openshift/ollama-deployment.yaml
+oc rollout status deployment/ollama
+```
+
+If CRC gets stuck with an old running pod and a new pending pod, reset Ollama cleanly:
+
+```powershell
+oc scale deployment/ollama --replicas=0
+oc wait --for=delete pod -l app=ollama --timeout=120s
+oc scale deployment/ollama --replicas=1
+oc rollout status deployment/ollama
+```
+
+## C. Stop CRC And Start CRC Then Check App
 
 Use this path for normal local shutdown and startup.
 
@@ -206,7 +376,7 @@ Watch logs while testing:
 oc logs deployment/document-app -f
 ```
 
-## C. Some Troubleshooting Tips
+## D. Some Troubleshooting Tips
 
 ### Quick Checks
 
@@ -215,6 +385,15 @@ oc get pods
 oc get svc
 oc get route
 oc get events --sort-by=.lastTimestamp
+```
+
+### Implementation Checks
+
+```powershell
+oc get deployment document-app -o jsonpath="{.spec.template.spec.containers[0].image}"
+oc get deployment ollama -o jsonpath="{.spec.strategy.type}"
+oc get configmap docmanager-config -o yaml
+oc get secret docmanager-secrets
 ```
 
 ### Common Issues
@@ -226,13 +405,32 @@ oc get events --sort-by=.lastTimestamp
 | Probe returns `HTTP 400` | Make sure the probe `Host` header is listed in `ALLOWED_HOSTS`. |
 | Login works but `/` returns `500` | Check app logs and confirm migrations ran successfully. |
 | Migration files changed | Rebuild the app image before restarting the deployment. |
+| Upload code changes do not appear in the browser | Rebuild with `oc start-build document-app --from-dir=. --follow`, then restart `deployment/document-app`. |
+| AI suggestions are not generated during upload | Confirm `AUTO_AI_METADATA_ON_UPLOAD=True`, restart `document-app`, and check `deployment/document-app` logs. |
+| Django still uses the old Ollama model | Restart `deployment/document-app` after applying the ConfigMap. |
+| Ollama pull job says `couldn't find key OLLAMA_MODEL in ConfigMap` | Reapply `openshift/docmanager-configmap.yaml`, then delete and recreate `job/ollama-pull-model`. |
+| Ollama pod says `Insufficient memory` or `model requires more system memory` | Use the smaller default `qwen2.5:0.5b`, reapply the config map and Ollama deployment, then recreate `job/ollama-pull-model`. |
+| Ollama rollout has one running old pod and one pending new pod | Scale `deployment/ollama` to zero, wait for pods to delete, then scale back to one. |
+| Ollama returns HTTP 500 to Django | Run `oc logs deployment/ollama --since=2m` and test direct generation with `oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"`. |
 
 ### Logs And Details
 
 ```powershell
 oc logs deployment/document-app --tail=200
+oc logs deployment/ollama --tail=200
 oc describe pod -l app=document-app
+oc describe pod -l app=ollama
 oc get route document-app -o jsonpath="{.spec.host}"
+```
+
+### Useful AI Debug Commands
+
+```powershell
+oc exec deployment/document-app -- printenv OLLAMA_BASE_URL
+oc exec deployment/document-app -- printenv OLLAMA_MODEL
+oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
+oc exec deployment/ollama -- ollama list
+oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
 ```
 
 ### Fallback Migration Job
@@ -252,4 +450,4 @@ oc logs job/docmanager-migrate
 | --- | --- |
 | `mysql-pvc` | Stored local database data |
 | `docmanager-media-pvc` | Uploaded media files |
-
+| `ollama-models-pvc` | Downloaded Ollama models |

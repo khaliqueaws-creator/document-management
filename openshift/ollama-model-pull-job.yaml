@@ -1,0 +1,23 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-pull-model
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pull-model
+          image: docker.io/ollama/ollama:latest
+          command:
+            - /bin/sh
+            - -c
+            - ollama pull "${OLLAMA_MODEL}"
+          env:
+            - name: OLLAMA_HOST
+              value: "http://ollama:11434"
+            - name: OLLAMA_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: docmanager-config
+                  key: OLLAMA_MODEL

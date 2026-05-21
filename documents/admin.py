@@ -5,9 +5,28 @@ from .models import AuditEvent, Document
 
 @admin.register(Document)
 class DocumentAdmin(admin.ModelAdmin):
-    list_display = ("document_type", "department", "author", "uploaded_at")
-    search_fields = ("document_type", "department", "author", "tags")
-    list_filter = ("document_type", "department", "uploaded_at")
+    list_display = (
+        "document_type",
+        "department",
+        "author",
+        "ai_suggestion_status",
+        "uploaded_at",
+    )
+    search_fields = (
+        "document_type",
+        "department",
+        "author",
+        "tags",
+        "ai_document_type",
+        "ai_department",
+        "ai_tags",
+    )
+    list_filter = (
+        "document_type",
+        "department",
+        "ai_suggestion_status",
+        "uploaded_at",
+    )
 
 
 @admin.register(AuditEvent)

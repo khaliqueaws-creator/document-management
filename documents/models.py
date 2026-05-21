@@ -5,11 +5,25 @@ class Document(models.Model):
     OCR_LANGUAGE_ENGLISH = "english"
     OCR_LANGUAGE_HINDI = "hindi"
     OCR_LANGUAGE_URDU = "urdu"
+    AI_STATUS_NOT_REQUESTED = "not_requested"
+    AI_STATUS_PENDING = "pending"
+    AI_STATUS_SUGGESTED = "suggested"
+    AI_STATUS_ACCEPTED = "accepted"
+    AI_STATUS_REJECTED = "rejected"
+    AI_STATUS_FAILED = "failed"
 
     OCR_LANGUAGE_CHOICES = [
         (OCR_LANGUAGE_ENGLISH, "English"),
         (OCR_LANGUAGE_HINDI, "Hindi"),
         (OCR_LANGUAGE_URDU, "Urdu"),
+    ]
+    AI_SUGGESTION_STATUS_CHOICES = [
+        (AI_STATUS_NOT_REQUESTED, "Not requested"),
+        (AI_STATUS_PENDING, "Pending"),
+        (AI_STATUS_SUGGESTED, "Suggested"),
+        (AI_STATUS_ACCEPTED, "Accepted"),
+        (AI_STATUS_REJECTED, "Rejected"),
+        (AI_STATUS_FAILED, "Failed"),
     ]
 
     document_type = models.CharField(max_length=100, blank=True)
@@ -28,6 +42,17 @@ class Document(models.Model):
     file = models.FileField(upload_to="documents/")
     uploaded_at = models.DateTimeField(auto_now_add=True)
     extracted_text = models.TextField(blank=True, null=True)
+    ai_document_type = models.CharField(max_length=100, blank=True)
+    ai_department = models.CharField(max_length=100, blank=True)
+    ai_tags = models.CharField(max_length=255, blank=True)
+    ai_summary = models.TextField(blank=True)
+    ai_suggestion_status = models.CharField(
+        max_length=20,
+        choices=AI_SUGGESTION_STATUS_CHOICES,
+        default=AI_STATUS_NOT_REQUESTED,
+    )
+    ai_suggested_at = models.DateTimeField(null=True, blank=True)
+    ai_error = models.TextField(blank=True)
 
     def __str__(self):
         return self.file.name

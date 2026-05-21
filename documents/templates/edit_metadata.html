@@ -54,6 +54,70 @@
             Open Document
         </a>
     </aside>
+
+    <aside class="document-preview-panel ai-suggestion-panel">
+        <div class="panel-heading">
+            <h3>AI Suggested Metadata</h3>
+            <span class="status-pill">{{ document.get_ai_suggestion_status_display }}</span>
+        </div>
+
+        {% if document.ai_suggestion_status == "suggested" or document.ai_suggestion_status == "accepted" or document.ai_suggestion_status == "rejected" %}
+            <dl class="metadata-list compact-metadata-list">
+                <dt>Document Type</dt>
+                <dd>{{ document.ai_document_type|default:"-" }}</dd>
+                <dt>Department</dt>
+                <dd>{{ document.ai_department|default:"-" }}</dd>
+                <dt>Tags</dt>
+                <dd>{{ document.ai_tags|default:"-" }}</dd>
+                <dt>Summary</dt>
+                <dd>{{ document.ai_summary|default:"-" }}</dd>
+            </dl>
+
+            {% if document.ai_suggested_at %}
+            <p class="muted-text">
+                Suggested {{ document.ai_suggested_at|date:"M d, Y H:i" }}
+            </p>
+            {% endif %}
+        {% elif document.ai_suggestion_status == "failed" %}
+            <p class="note">
+                Metadata suggestion failed.
+            </p>
+            {% if document.ai_error %}
+            <p class="muted-text">
+                {{ document.ai_error }}
+            </p>
+            {% endif %}
+        {% else %}
+            <p class="note">
+                No AI suggestion is available for this document.
+            </p>
+        {% endif %}
+
+        <div class="ai-action-row">
+            <form method="post" action="{% url 'generate_ai_metadata' document.id %}" class="inline-form">
+                {% csrf_token %}
+                <button type="submit" class="secondary-button">
+                    Regenerate
+                </button>
+            </form>
+
+            {% if document.ai_suggestion_status == "suggested" %}
+            <form method="post" action="{% url 'accept_ai_metadata' document.id %}" class="inline-form">
+                {% csrf_token %}
+                <button type="submit">
+                    Accept
+                </button>
+            </form>
+
+            <form method="post" action="{% url 'reject_ai_metadata' document.id %}" class="inline-form">
+                {% csrf_token %}
+                <button type="submit" class="danger-button">
+                    Reject
+                </button>
+            </form>
+            {% endif %}
+        </div>
+    </aside>
 </div>
 
 {% endblock %}

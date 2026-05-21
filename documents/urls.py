@@ -59,6 +59,24 @@ urlpatterns = [
         name="edit_document_metadata"
     ),
 
+    path(
+        "edit/<int:document_id>/ai/generate/",
+        views.generate_ai_metadata,
+        name="generate_ai_metadata"
+    ),
+
+    path(
+        "edit/<int:document_id>/ai/accept/",
+        views.accept_ai_metadata,
+        name="accept_ai_metadata"
+    ),
+
+    path(
+        "edit/<int:document_id>/ai/reject/",
+        views.reject_ai_metadata,
+        name="reject_ai_metadata"
+    ),
+
     # Delete document
     path(
         "delete/<int:document_id>/",

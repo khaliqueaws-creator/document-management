@@ -3,17 +3,20 @@ from django.core.files import File
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import render, redirect
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth import logout as django_logout
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Q
 from django.urls import reverse
+from django.utils import timezone
 
 from .forms import (
     DocumentForm,
     DocumentMetadataForm,
     validate_uploaded_file,
 )
+from .ai_metadata import MetadataSuggestionError, suggest_metadata_with_ollama
 from .models import AuditEvent, Document
 from .auth import oauth
 from .permissions import (
@@ -75,6 +78,69 @@ def record_audit_event(request, document, action, metadata=None):
         actor_email=get_actor_email(request),
         metadata=metadata or get_document_audit_metadata(document),
     )
+
+
+def get_ai_metadata_source_text(document):
+    text = (document.extracted_text or "").strip()
+
+    if text.startswith("TEXT_EXTRACTION_FAILED:"):
+        return ""
+
+    return text
+
+
+def store_ai_metadata_suggestions(document):
+    document.ai_suggestion_status = Document.AI_STATUS_PENDING
+    document.ai_error = ""
+    document.save(
+        update_fields=[
+            "ai_suggestion_status",
+            "ai_error",
+        ]
+    )
+
+    suggestions = suggest_metadata_with_ollama(
+        get_ai_metadata_source_text(document)
+    )
+
+    document.ai_document_type = suggestions["document_type"]
+    document.ai_department = suggestions["department"]
+    document.ai_tags = suggestions["tags"]
+    document.ai_summary = suggestions["summary"]
+    document.ai_suggestion_status = Document.AI_STATUS_SUGGESTED
+    document.ai_suggested_at = timezone.now()
+    document.ai_error = ""
+    document.save(
+        update_fields=[
+            "ai_document_type",
+            "ai_department",
+            "ai_tags",
+            "ai_summary",
+            "ai_suggestion_status",
+            "ai_suggested_at",
+            "ai_error",
+        ]
+    )
+
+
+def try_store_ai_metadata_suggestions(document):
+    if not settings.AUTO_AI_METADATA_ON_UPLOAD:
+        return False
+
+    try:
+        store_ai_metadata_suggestions(document)
+    except MetadataSuggestionError as error:
+        document.ai_suggestion_status = Document.AI_STATUS_FAILED
+        document.ai_error = str(error)
+        document.save(
+            update_fields=[
+                "ai_suggestion_status",
+                "ai_error",
+            ]
+        )
+        return False
+
+    return True
 
 
 def healthz(request):
@@ -245,7 +311,18 @@ def upload_document(request):
 
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
-            return redirect("/")
+            if try_store_ai_metadata_suggestions(document):
+                messages.success(
+                    request,
+                    "AI metadata suggestions are ready for review."
+                )
+            elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+                messages.warning(
+                    request,
+                    "Document uploaded, but AI metadata suggestions failed."
+                )
+
+            return redirect("edit_document_metadata", document_id=document.id)
 
     else:
         form = DocumentForm()
@@ -390,12 +467,23 @@ def confirm_document(request):
         document.save()
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
+        if try_store_ai_metadata_suggestions(document):
+            messages.success(
+                request,
+                "AI metadata suggestions are ready for review."
+            )
+        elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+            messages.warning(
+                request,
+                "Document saved, but AI metadata suggestions failed."
+            )
+
         try:
             os.remove(temp_file_path)
         except Exception:
             pass
 
-        return redirect("search")
+        return redirect("edit_document_metadata", document_id=document.id)
 
     return redirect("upload_scanned_image")
 
@@ -519,6 +607,92 @@ def edit_document_metadata(request, document_id):
             ".bmp",
         ],
     })
+
+
+@okta_role_required(is_loader)
+def generate_ai_metadata(request, document_id):
+    if request.method != "POST":
+        return redirect("edit_document_metadata", document_id=document_id)
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    try:
+        store_ai_metadata_suggestions(document)
+    except MetadataSuggestionError as error:
+        document.ai_suggestion_status = Document.AI_STATUS_FAILED
+        document.ai_error = str(error)
+        document.save(
+            update_fields=[
+                "ai_suggestion_status",
+                "ai_error",
+            ]
+        )
+        messages.error(request, str(error))
+        return redirect("edit_document_metadata", document_id=document.id)
+
+    messages.success(request, "AI metadata suggestions generated.")
+
+    return redirect("edit_document_metadata", document_id=document.id)
+
+
+@okta_role_required(is_loader)
+def accept_ai_metadata(request, document_id):
+    if request.method != "POST":
+        return redirect("edit_document_metadata", document_id=document_id)
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    before_metadata = get_document_audit_metadata(document)
+
+    if document.ai_document_type:
+        document.document_type = document.ai_document_type
+    if document.ai_department:
+        document.department = document.ai_department
+    if document.ai_tags:
+        document.tags = document.ai_tags
+    if document.ai_summary:
+        document.description = document.ai_summary
+
+    document.ai_suggestion_status = Document.AI_STATUS_ACCEPTED
+    document.save()
+    document.refresh_from_db()
+
+    record_audit_event(
+        request,
+        document,
+        AuditEvent.ACTION_EDIT,
+        {
+            "source": "ai_metadata_accept",
+            "before": before_metadata,
+            "after": get_document_audit_metadata(document),
+        },
+    )
+    messages.success(request, "AI suggestions accepted into metadata.")
+
+    return redirect("edit_document_metadata", document_id=document.id)
+
+
+@okta_role_required(is_loader)
+def reject_ai_metadata(request, document_id):
+    if request.method != "POST":
+        return redirect("edit_document_metadata", document_id=document_id)
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    document.ai_suggestion_status = Document.AI_STATUS_REJECTED
+    document.save(update_fields=["ai_suggestion_status"])
+    messages.info(request, "AI suggestions rejected.")
+
+    return redirect("edit_document_metadata", document_id=document.id)
 
 
 @okta_role_required(is_admin)

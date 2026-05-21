@@ -145,6 +145,18 @@
             color: #750e13;
         }
 
+        .alert-success {
+            background: #defbe6;
+            border-color: #24a148;
+            color: #0e6027;
+        }
+
+        .alert-info {
+            background: #edf5ff;
+            border-color: #0f62fe;
+            color: #0043ce;
+        }
+
         label {
             font-weight: 600;
             display: block;
@@ -191,6 +203,16 @@
             margin-top: 24px;
 
             transition: 0.2s;
+        }
+
+        .secondary-button {
+            background: #393939;
+        }
+
+        .secondary-button:disabled {
+            background: #c6c6c6;
+            color: #525252;
+            cursor: not-allowed;
         }
 
         button:hover,
@@ -367,7 +389,7 @@
 
         .edit-layout {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+            grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
             gap: 28px;
             align-items: start;
         }
@@ -381,6 +403,28 @@
 
         .document-preview-panel h3 {
             margin-top: 0;
+        }
+
+        .panel-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .panel-heading h3 {
+            margin: 0;
+        }
+
+        .status-pill {
+            border: 1px solid #c6c6c6;
+            border-radius: 999px;
+            color: #525252;
+            font-size: 12px;
+            line-height: 1;
+            padding: 6px 10px;
+            white-space: nowrap;
         }
 
         .document-preview-image {
@@ -415,6 +459,36 @@
 
         .metadata-list dd {
             margin: 0;
+        }
+
+        .compact-metadata-list {
+            grid-template-columns: 120px minmax(0, 1fr);
+            margin: 18px 0;
+        }
+
+        .ai-suggestion-panel {
+            grid-column: 2;
+        }
+
+        .ai-placeholder-note {
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        .ai-action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            margin-top: 16px;
+        }
+
+        .inline-form {
+            display: inline;
+        }
+
+        .inline-form button {
+            margin-top: 0;
         }
 
         /* =========================
@@ -495,6 +569,10 @@
             .edit-layout {
                 grid-template-columns: 1fr;
             }
+
+            .ai-suggestion-panel {
+                grid-column: auto;
+            }
         }
 
     </style>
@@ -560,6 +638,14 @@
         <div class="main">
 
             <div class="page-card">
+
+                {% if messages %}
+                    {% for message in messages %}
+                    <div class="alert alert-{{ message.tags }}">
+                        {{ message }}
+                    </div>
+                    {% endfor %}
+                {% endif %}
 
                 {% block content %}
                 {% endblock %}
