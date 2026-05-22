@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, and AI metadata suggestions through a switchable Gemini or Ollama provider.
+A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, and AI metadata suggestions through switchable Ollama, Gemini, or AWS Bedrock providers.
 
 The public demo path used during development is:
 
@@ -32,8 +32,9 @@ flowchart LR
     Django --> OCR[Tesseract OCR]
 
     Django --> AI{AI Provider}
-    AI --> Gemini[Gemini]
     AI --> Ollama[Ollama]
+    AI --> Gemini[Gemini]
+    AI --> Bedrock[AWS Bedrock Nova Lite]
 ```
 
 ## Project Purpose
@@ -60,7 +61,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - View audit events through an admin-only audit page.
 - Authenticate users through Okta OIDC.
 - Authorize access through Okta group-based application roles.
-- Generate AI metadata suggestions through Ollama or Gemini.
+- Generate AI metadata suggestions through Ollama, Gemini, or AWS Bedrock Nova Lite.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
 
@@ -77,7 +78,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Document parsing | pypdf, python-docx, openpyxl |
 | Authentication | Okta OIDC through Authlib |
 | Authorization | Okta groups stored in Django session |
-| AI metadata | Switchable Ollama or Gemini provider |
+| AI metadata | Switchable Ollama, Gemini, or AWS Bedrock provider |
 | Container platform | OpenShift CRC |
 | Container image | Docker build through OpenShift binary build |
 | Public demo access | Cloudflare Tunnel |
@@ -94,11 +95,73 @@ Browser
 
 Django
   -> document media PVC
+  -> Ollama Service and Ollama model PVC
   -> Gemini API over HTTPS
-  -> or Ollama Service and Ollama model PVC
+  -> AWS Bedrock Nova Lite over HTTPS
 ```
 
-The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Gemini is the preferred external provider for higher-quality metadata suggestions. Ollama remains available as a local/private fallback and serves the local model over the internal OpenShift service name `http://ollama:11434`.
+The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external provider options.
+
+## Switching AI Metadata Providers
+
+The active AI metadata provider is controlled by `AI_METADATA_PROVIDER`. Supported values are:
+
+```text
+ollama
+gemini
+bedrock
+```
+
+Check the current provider in OpenShift:
+
+```powershell
+oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+```
+
+Switch to Ollama:
+
+```powershell
+oc set env deployment/document-app `
+  AI_METADATA_PROVIDER=ollama `
+  OLLAMA_BASE_URL=http://ollama:11434 `
+  OLLAMA_MODEL=qwen2.5:0.5b
+```
+
+Switch to Gemini:
+
+```powershell
+oc set env deployment/document-app `
+  AI_METADATA_PROVIDER=gemini `
+  GEMINI_MODEL=gemini-2.5-flash
+```
+
+Gemini also requires `GEMINI_API_KEY` in `secret/docmanager-secrets`.
+
+Switch to AWS Bedrock Nova Lite:
+
+```powershell
+oc set env deployment/document-app `
+  AI_METADATA_PROVIDER=bedrock `
+  AWS_REGION=us-east-1 `
+  BEDROCK_NOVA_MODEL_ID=amazon.nova-lite-v1:0
+```
+
+Bedrock uses boto3's normal credential chain. In OpenShift, provide AWS credentials through `secret/docmanager-secrets` or another injected credential mechanism:
+
+```text
+AWS_ACCESS_KEY_ID
+AWS_SECRET_ACCESS_KEY
+AWS_SESSION_TOKEN  # only for temporary credentials
+```
+
+After switching providers, wait for the rollout and verify Django starts:
+
+```powershell
+oc rollout status deployment/document-app
+oc exec deployment/document-app -- python manage.py check
+```
+
+Then regenerate AI metadata on a document from the edit metadata page. The AI Suggested Metadata panel shows which provider produced the suggestion.
 
 ## Role Model
 
