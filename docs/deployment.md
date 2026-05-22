@@ -63,6 +63,7 @@ flowchart TB
 | ollama | Optional local AI inference service. |
 | Gemini API | Optional external AI metadata provider. |
 | AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
+| AWS Bedrock Titan Embeddings V2 | Optional embedding provider for semantic AI search. |
 | Media PVC | Persistent storage for uploaded files. |
 | MySQL PVC | Persistent database storage. |
 | Ollama Model PVC | Persistent AI model storage. |
@@ -98,6 +99,57 @@ sequenceDiagram
     Django->>Gemini: Optional external metadata generation
     Django->>Bedrock: Optional external metadata generation
 ```
+
+## AWS Bedrock Phase 3 Configuration
+
+Bedrock Phase 3 adds AWS-managed metadata generation and embeddings. Configure
+non-secret settings in the OpenShift ConfigMap or EC2 environment:
+
+| Variable | Example | Purpose |
+| --- | --- | --- |
+| AI_METADATA_PROVIDER | bedrock | Uses AWS Bedrock Nova Lite for metadata suggestions. |
+| AWS_REGION | us-east-1 | AWS region for Bedrock runtime calls. |
+| BEDROCK_NOVA_MODEL_ID | amazon.nova-lite-v1:0 | Nova Lite model used for metadata suggestions. |
+| BEDROCK_EMBED_MODEL_ID | amazon.titan-embed-text-v2:0 | Titan model used for embeddings. |
+| AI_EMBEDDING_MAX_CHARS | 2500 | Maximum text characters per embedding chunk. |
+| AI_SEARCH_TOP_K | 5 | Number of semantic search results to return. |
+
+Do not hardcode AWS credentials in application code. Use normal AWS credential
+sources such as environment variables, OpenShift secrets, EC2 instance profiles,
+or other supported boto3 credential providers.
+
+Minimum AWS IAM permissions for Bedrock use:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "bedrock:InvokeModel",
+    "bedrock:Converse"
+  ],
+  "Resource": "*"
+}
+```
+
+`bedrock:InvokeModel` is required for Titan embeddings and direct model calls.
+`bedrock:Converse` is only required if the application or future provider code
+uses the Bedrock Converse API.
+
+Validate AWS access from PowerShell before enabling Bedrock:
+
+```powershell
+aws sts get-caller-identity
+aws bedrock list-foundation-models --region us-east-1
+```
+
+Validate embeddings from the deployed app:
+
+```powershell
+oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
+```
+
+Successful output should show documents processed with chunks created. Errors
+are printed per document and do not stop the entire batch.
 
 ## Persistent Storage Design
 

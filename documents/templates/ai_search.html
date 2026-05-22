@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}AI Search{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>AI Search</h2>
+        {% if query %}
+            <p class="note">{{ results|length }} result{{ results|length|pluralize }} found</p>
+        {% else %}
+            <p class="note">Search documents by meaning.</p>
+        {% endif %}
+    </div>
+</div>
+
+<form method="get" class="search-box">
+    <input type="text"
+           name="q"
+           placeholder="Search by meaning"
+           value="{{ query }}">
+    <button type="submit">Search</button>
+    <a href="{% url 'ai_search' %}" class="secondary-action search-reset">Reset</a>
+</form>
+
+{% if not has_embeddings %}
+    <p class="empty">
+        No AI embeddings found. Run rebuild_embeddings or upload documents after enabling Bedrock.
+    </p>
+{% elif query %}
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Document</th>
+                    <th>Department</th>
+                    <th>Tags</th>
+                    <th>Score</th>
+                    <th>Best Match</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for result in results %}
+                <tr>
+                    <td>
+                        <div class="primary-text">
+                            {{ result.document.file.name }}
+                        </div>
+                        <div class="muted-text">
+                            {{ result.document.document_type|default:"Untyped document" }}
+                        </div>
+                    </td>
+                    <td>{{ result.document.department }}</td>
+                    <td>{{ result.document.tags|default:"-" }}</td>
+                    <td>{{ result.score|floatformat:3 }}</td>
+                    <td>{{ result.best_chunk|truncatechars:240 }}</td>
+                    <td>
+                        <div class="action-list">
+                            <a href="{% url 'secure_document_view' result.document.id %}"
+                               target="_blank"
+                               rel="noopener">
+                                Open
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="6" class="empty">
+                        No semantically similar documents found.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %}
+
+{% endblock %}

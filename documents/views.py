@@ -17,7 +17,9 @@ from .forms import (
     validate_uploaded_file,
 )
 from .ai_metadata import MetadataSuggestionError, suggest_metadata
-from .models import AuditEvent, Document
+from .embeddings import EmbeddingError, rebuild_document_embeddings
+from .models import AuditEvent, Document, DocumentChunk
+from .semantic_search import search_documents_by_meaning
 from .auth import oauth
 from .permissions import (
     okta_role_required,
@@ -141,6 +143,22 @@ def try_store_ai_metadata_suggestions(document):
                 "ai_suggestion_status",
                 "ai_error",
             ]
+        )
+        return False
+
+    return True
+
+
+def try_rebuild_document_embeddings(request, document):
+    if not get_ai_metadata_source_text(document):
+        return False
+
+    try:
+        rebuild_document_embeddings(document)
+    except EmbeddingError:
+        messages.warning(
+            request,
+            "Document uploaded, but search embeddings could not be generated."
         )
         return False
 
@@ -313,6 +331,8 @@ def upload_document(request):
                 document.extracted_text = f"TEXT_EXTRACTION_FAILED: {str(e)}"
                 document.save()
 
+            try_rebuild_document_embeddings(request, document)
+
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
             if try_store_ai_metadata_suggestions(document):
@@ -469,6 +489,7 @@ def confirm_document(request):
             )
 
         document.save()
+        try_rebuild_document_embeddings(request, document)
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         if try_store_ai_metadata_suggestions(document):
@@ -532,6 +553,28 @@ def search_documents(request):
         "page_obj": page_obj,
         "query_string": query_params.urlencode(),
         "total_documents": paginator.count,
+    })
+
+
+@okta_role_required(is_viewer)
+def ai_search(request):
+    query = (request.GET.get("q") or "").strip()
+    results = []
+    has_embeddings = DocumentChunk.objects.exclude(embedding=[]).exists()
+
+    if query and has_embeddings:
+        try:
+            results = search_documents_by_meaning(query)
+        except EmbeddingError as error:
+            messages.warning(
+                request,
+                f"AI search could not be completed: {error}"
+            )
+
+    return render(request, "ai_search.html", {
+        "query": query,
+        "results": results,
+        "has_embeddings": has_embeddings,
     })
 
 

@@ -71,6 +71,26 @@ class Document(models.Model):
         return self.file.name
 
 
+class DocumentChunk(models.Model):
+    document = models.ForeignKey(
+        Document,
+        on_delete=models.CASCADE,
+        related_name="chunks",
+    )
+    chunk_index = models.PositiveIntegerField()
+    chunk_text = models.TextField()
+    embedding = models.JSONField(default=list, blank=True)
+    embedding_model = models.CharField(max_length=100, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["document_id", "chunk_index"]
+        unique_together = ("document", "chunk_index")
+
+    def __str__(self):
+        return f"{self.document_id} - chunk {self.chunk_index}"
+
+
 class AuditEvent(models.Model):
     ACTION_UPLOAD = "upload"
     ACTION_EDIT = "edit"

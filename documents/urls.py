@@ -7,6 +7,7 @@ urlpatterns = [
     # Home / Search
     path("", views.search_documents, name="home"),
     path("search/", views.search_documents, name="search"),
+    path("ai-search/", views.ai_search, name="ai_search"),
 
     # Normal upload
     path("upload/", views.upload_document, name="upload"),

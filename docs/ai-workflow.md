@@ -13,15 +13,18 @@ sequenceDiagram
     participant Media as Media PVC
     participant OCR as Text Extraction / OCR
     participant AI as AI Provider
+    participant Embeddings as Bedrock Titan Embeddings
     participant DB as MySQL
 
     Loader->>Django: Upload document + metadata
     Django->>Media: Save uploaded file
     Django->>OCR: Extract text / OCR if needed
     OCR-->>Django: Extracted text
+    Django->>Embeddings: Generate chunk embeddings when text is valid
+    Embeddings-->>Django: Embedding vectors
     Django->>AI: Send text for metadata suggestion
     AI-->>Django: Suggested type, department, tags, summary
-    Django->>DB: Save metadata, extracted text, AI suggestion, audit event
+    Django->>DB: Save metadata, extracted text, chunks, AI suggestion, audit event
     Django-->>Loader: Show edit/review page
     Loader->>Django: Accept / reject / regenerate AI suggestion
     Django->>DB: Update final metadata and status
@@ -127,22 +130,93 @@ Benefits:
 | AWS Bedrock Nova Lite | AWS-managed model access through boto3 | Requires AWS credentials, permissions, and model access |
 | Ollama | Local/private inference | Limited by local CPU and memory |
 
+## AWS Bedrock Phase 3
+
+Bedrock Phase 3 supports two AI capabilities:
+
+- Metadata suggestions through AWS Bedrock Nova Lite.
+- Semantic search embeddings through AWS Bedrock Titan Text Embeddings V2.
+
+Required environment variables:
+
+| Variable | Recommended value | Purpose |
+| --- | --- | --- |
+| AI_METADATA_PROVIDER | bedrock | Selects Bedrock Nova Lite for metadata suggestions. |
+| AWS_REGION | us-east-1 | Region used by boto3 Bedrock runtime clients. |
+| BEDROCK_NOVA_MODEL_ID | amazon.nova-lite-v1:0 | Model used for metadata extraction. |
+| BEDROCK_EMBED_MODEL_ID | amazon.titan-embed-text-v2:0 | Model used for document chunk embeddings. |
+| AI_EMBEDDING_MAX_CHARS | 2500 | Maximum source text per embedding chunk. |
+| AI_SEARCH_TOP_K | 5 | Number of AI search results to show. |
+
+Credentials are intentionally not configured in Django settings. boto3 should
+use the standard AWS credential chain, such as AWS environment variables,
+OpenShift secrets, or EC2 instance profiles.
+
+Minimum AWS permissions:
+
+```text
+bedrock:InvokeModel
+bedrock:Converse if Converse API calls are used
+```
+
+PowerShell validation:
+
+```powershell
+aws sts get-caller-identity
+aws bedrock list-foundation-models --region us-east-1
+```
+
+Application validation:
+
+```powershell
+python manage.py rebuild_embeddings --limit 5
+```
+
+For OpenShift:
+
+```powershell
+oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
+```
+
+Successful output shows each document id, file name, and number of chunks
+created. If one document fails, the command prints the error and continues.
+
+## Embedding and Semantic Search Flow
+
+```mermaid
+flowchart TB
+    Extracted[Extracted Text] --> Chunk[Paragraph-aware chunking]
+    Chunk --> Titan[AWS Bedrock Titan Embeddings V2]
+    Titan --> Store[DocumentChunk JSON embeddings]
+    Query[User AI search query] --> QueryEmbedding[Query embedding]
+    QueryEmbedding --> Compare[Cosine similarity]
+    Store --> Compare
+    Compare --> Results[Ranked document results]
+```
+
+Document chunks are stored in the database with their source text, embedding
+model, and JSON embedding vector. AI Search embeds the user's query, compares it
+with stored chunk embeddings, keeps the best matching chunk per document, and
+returns ranked document results.
+
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
+- AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.
 - AI suggestions remain separate from official metadata until accepted.
+- Embedding failures do not block document upload or metadata suggestions.
 
 ## Future AI Enhancements
 
 Planned future enhancements include:
 
 - Background AI processing queues.
-- Semantic search.
-- Vector embeddings.
+- Semantic search refinements.
+- Vector database storage such as PostgreSQL with pgvector.
 - RAG document question answering.
 - Metadata confidence scoring.
 - Duplicate document detection.

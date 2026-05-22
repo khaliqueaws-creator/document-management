@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, and AI metadata suggestions through switchable Ollama, Gemini, or AWS Bedrock providers.
+A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
 
 The public demo path used during development is:
 
@@ -35,13 +35,16 @@ flowchart LR
     AI --> Ollama[Ollama]
     AI --> Gemini[Gemini]
     AI --> Bedrock[AWS Bedrock Nova Lite]
+
+    Django --> Embeddings[AWS Bedrock Titan Embeddings]
+    Embeddings --> Chunks[(DocumentChunk embeddings)]
 ```
 
 ## Project Purpose
 
 This project is a learning and architecture build for an enterprise-style document management and intelligent document processing platform. The goal is to grow a simple upload/search application into a practical ECM/IDP-style system using open-source components and production-like deployment patterns.
 
-The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, and AI-assisted metadata suggestions.
+The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, AI-assisted metadata suggestions, document embeddings, and semantic AI search.
 
 ## Current Feature Set
 
@@ -64,6 +67,11 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Generate AI metadata suggestions through Ollama, Gemini, or AWS Bedrock Nova Lite.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
+- Split extracted text into chunks and store AWS Bedrock Titan embeddings.
+- Rebuild embeddings in batch with a Django management command.
+- Search documents by meaning through the AI Search page.
+- Bulk import local test documents through a Django management command.
+- Use synthetic Word, Excel, PDF, and OCR image samples from `test_documents/`.
 
 ## Technology Stack
 
@@ -79,6 +87,8 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Authentication | Okta OIDC through Authlib |
 | Authorization | Okta groups stored in Django session |
 | AI metadata | Switchable Ollama, Gemini, or AWS Bedrock provider |
+| AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
+| Semantic search | JSON embeddings with cosine similarity |
 | Container platform | OpenShift CRC |
 | Container image | Docker build through OpenShift binary build |
 | Public demo access | Cloudflare Tunnel |
@@ -98,9 +108,11 @@ Django
   -> Ollama Service and Ollama model PVC
   -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
+  -> AWS Bedrock Titan Embeddings over HTTPS
+  -> DocumentChunk rows in MySQL
 ```
 
-The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external provider options.
+The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
 ## Switching AI Metadata Providers
 
@@ -148,7 +160,10 @@ oc set env deployment/document-app `
   OLLAMA_MODEL=qwen2.5:0.5b `
   GEMINI_MODEL=gemini-2.5-flash `
   AWS_REGION=us-east-1 `
-  BEDROCK_NOVA_MODEL_ID=amazon.nova-lite-v1:0
+  BEDROCK_NOVA_MODEL_ID=amazon.nova-lite-v1:0 `
+  BEDROCK_EMBED_MODEL_ID=amazon.titan-embed-text-v2:0 `
+  AI_EMBEDDING_MAX_CHARS=2500 `
+  AI_SEARCH_TOP_K=5
 ```
 
 Bedrock uses boto3's normal credential chain. In OpenShift, provide AWS credentials through `secret/docmanager-secrets` or another injected credential mechanism:
@@ -167,6 +182,72 @@ oc exec deployment/document-app -- python manage.py check
 ```
 
 Then regenerate AI metadata on a document from the edit metadata page. The AI Suggested Metadata panel shows which provider produced the suggestion.
+
+## AI Embeddings and Semantic Search
+
+The application stores semantic embeddings in `DocumentChunk` records. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, and saved as JSON vectors in MySQL.
+
+Embeddings are generated automatically after upload when extracted text is available. If embedding generation fails, upload still succeeds and AI metadata suggestions continue.
+
+Rebuild embeddings for existing documents:
+
+```powershell
+oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
+```
+
+Open the AI Search page:
+
+```text
+/ai-search/
+```
+
+Example semantic queries:
+
+```text
+employee onboarding
+vendor invoice
+security access request
+privacy impact
+expense reimbursement
+```
+
+## Bulk Test Document Import
+
+The repository includes synthetic test documents under `test_documents/`:
+
+```text
+test_documents/word/
+test_documents/excel/
+test_documents/pdf/
+test_documents/ocr_images/
+```
+
+These files are generated for upload, OCR, metadata, embedding, and AI Search testing.
+
+Copy them into the running OpenShift pod:
+
+```powershell
+oc get pods -l app=document-app
+oc cp test_documents <document-app-pod>:/tmp/test_documents
+```
+
+Import a batch:
+
+```powershell
+oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/test_documents --limit 20
+```
+
+Then create embeddings:
+
+```powershell
+oc exec deployment/document-app -- python manage.py rebuild_embeddings
+```
+
+Run lightweight tests inside OpenShift:
+
+```powershell
+oc exec deployment/document-app -- python manage.py test documents
+```
 
 ## Role Model
 

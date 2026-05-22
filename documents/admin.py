@@ -1,6 +1,6 @@
 # Register your models here.
 from django.contrib import admin
-from .models import AuditEvent, Document
+from .models import AuditEvent, Document, DocumentChunk
 
 
 @admin.register(Document)
@@ -47,5 +47,27 @@ class AuditEventAdmin(admin.ModelAdmin):
         "actor_name",
         "actor_email",
         "metadata",
+        "created_at",
+    )
+
+
+@admin.register(DocumentChunk)
+class DocumentChunkAdmin(admin.ModelAdmin):
+    list_display = (
+        "document",
+        "chunk_index",
+        "embedding_model",
+        "created_at",
+    )
+    search_fields = (
+        "chunk_text",
+        "document__file",
+    )
+    readonly_fields = (
+        "document",
+        "chunk_index",
+        "chunk_text",
+        "embedding",
+        "embedding_model",
         "created_at",
     )
