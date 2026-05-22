@@ -5,7 +5,8 @@ Deploy, restart, and troubleshoot the Django document manager on local OpenShift
 This runbook reflects the current implementation:
 
 - Django runs as `deployment/document-app` with Gunicorn.
-- MySQL runs as `deployment/mysql`.
+- PostgreSQL runs as `deployment/postgresql` and is the active database backend.
+- MySQL can remain scaled to 0 as a rollback option with `mysql-pvc` retained.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
 - Gemini can be used by setting `AI_METADATA_PROVIDER=gemini`.
 - AWS Bedrock Nova Lite can be used by setting `AI_METADATA_PROVIDER=bedrock`.
@@ -24,7 +25,8 @@ This runbook reflects the current implementation:
 | [A. Rebuild From Scratch](#a-rebuild-from-scratch) | CRC was recreated, the project was removed, or you want a clean local deployment. |
 | [B. Normal Code Or Config Redeploy](#b-normal-code-or-config-redeploy) | You changed Django code, templates, migrations, ConfigMap values, or Ollama model settings. |
 | [C. Stop CRC And Start CRC Then Check App](#c-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
-| [D. Some Troubleshooting Tips](#d-some-troubleshooting-tips) | Pods, routes, migrations, probes, Ollama, or login checks are failing. |
+| [D. PostgreSQL Active With MySQL Rollback](#d-postgresql-active-with-mysql-rollback) | You want to verify PostgreSQL or roll back to MySQL. |
+| [E. Some Troubleshooting Tips](#e-some-troubleshooting-tips) | Pods, routes, migrations, probes, Ollama, or login checks are failing. |
 
 ## A. Rebuild From Scratch
 
@@ -101,13 +103,13 @@ oc get istag document-app:latest
 
 ### 4. Apply Resources
 
-Apply MySQL resources first. MySQL reads database values from `docmanager-secrets`.
+Apply PostgreSQL resources first. PostgreSQL reads database values from `docmanager-secrets`.
 
 ```powershell
 oc apply -f openshift/docmanager-secret-template.yaml
-oc apply -f openshift/mysql-pvc.yaml
-oc apply -f openshift/mysql-deployment.yaml
-oc rollout status deployment/mysql
+oc apply -f openshift/postgresql-pvc.yaml
+oc apply -f openshift/postgresql-deployment.yaml
+oc rollout status deployment/postgresql
 ```
 
 Apply the Django resources:
@@ -444,7 +446,58 @@ Watch logs while testing:
 oc logs deployment/document-app -f
 ```
 
-## D. Some Troubleshooting Tips
+## D. PostgreSQL Active With MySQL Rollback
+
+PostgreSQL is the active database backend. MySQL support and `mysql-pvc` are
+retained as a rollback option.
+
+Verify PostgreSQL:
+
+```powershell
+oc apply -f openshift/postgresql-pvc.yaml
+oc apply -f openshift/postgresql-deployment.yaml
+oc rollout status deployment/postgresql
+oc get pods -l app=postgresql
+oc get svc postgresql
+oc exec deployment/postgresql -- psql -U docuser -d document_management -c "select version();"
+oc exec deployment/document-app -- python -c "import socket; print(socket.gethostbyname('postgresql'))"
+```
+
+Verify Django is using PostgreSQL:
+
+```powershell
+oc exec deployment/document-app -- python manage.py shell -c "from django.conf import settings; print(settings.DATABASES['default']['ENGINE']); print(settings.DATABASES['default']['HOST']); print(settings.DATABASES['default']['PORT'])"
+```
+
+Expected:
+
+```text
+django.db.backends.postgresql
+postgresql
+5432
+```
+
+Keep MySQL scaled down but do not delete `mysql-pvc`:
+
+```powershell
+oc scale deployment/mysql --replicas=0
+oc get deployment mysql
+oc get pvc mysql-pvc
+```
+
+Rollback to MySQL if needed:
+
+```powershell
+oc scale deployment/mysql --replicas=1
+oc rollout status deployment/mysql
+oc set env deployment/document-app `
+  DB_ENGINE=mysql `
+  DB_HOST=mysql `
+  DB_PORT=3306
+oc rollout status deployment/document-app
+```
+
+## E. Some Troubleshooting Tips
 
 ### Quick Checks
 

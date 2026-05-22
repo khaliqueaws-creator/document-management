@@ -26,7 +26,8 @@ flowchart LR
     Cloudflare --> OpenShift[OpenShift Route]
     OpenShift --> Django[Django + Gunicorn]
 
-    Django --> MySQL[(MySQL)]
+    Django --> PostgreSQL[(PostgreSQL)]
+    Django -. rollback .-> MySQL[(MySQL)]
     Django --> Storage[(Media PVC)]
 
     Django --> OCR[Tesseract OCR]
@@ -51,7 +52,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Upload PDFs, Word documents, text files, spreadsheets, and supported images.
 - Validate uploads by extension, content type, and configured size limit.
 - Store uploaded files on OpenShift persistent volume storage.
-- Store document metadata and extracted text in MySQL.
+- Store document metadata, extracted text, and embeddings in PostgreSQL.
 - Extract text from PDF, DOCX, TXT, XLSX, and image files.
 - Use OCR fallback for scanned PDFs and direct OCR for scanned images.
 - Search by document type, subtype, department, author, tags, and extracted text.
@@ -80,7 +81,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Frontend | Django templates, server-rendered HTML/CSS |
 | Backend | Python, Django |
 | App server | Gunicorn |
-| Database | MySQL by default, PostgreSQL optional |
+| Database | PostgreSQL active, MySQL retained as optional fallback |
 | File storage | OpenShift PersistentVolumeClaim |
 | OCR | Tesseract, pdf2image, Pillow |
 | Document parsing | pypdf, python-docx, openpyxl |
@@ -100,7 +101,7 @@ Browser
   -> Cloudflare Tunnel / OpenShift Route
   -> document-app Service
   -> Gunicorn + Django
-  -> MySQL or PostgreSQL Service
+  -> PostgreSQL Service
   -> Database PVC
 
 Django
@@ -109,27 +110,16 @@ Django
   -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
   -> AWS Bedrock Titan Embeddings over HTTPS
-  -> DocumentChunk rows in MySQL
+  -> DocumentChunk rows in PostgreSQL
 ```
 
-The Django application and database run as separate OpenShift deployments. MySQL is the default backend, and PostgreSQL can be enabled with `DB_ENGINE=postgresql`. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application and database run as separate OpenShift deployments. PostgreSQL is the active OpenShift database with `DB_ENGINE=postgresql`. MySQL support remains available through `DB_ENGINE=mysql` and the MySQL manifests are retained as a rollback option. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
 ## Database Backend Selection
 
 The application chooses its Django database backend from `DB_ENGINE`.
 
-Default MySQL configuration:
-
-```text
-DB_ENGINE=mysql
-DB_NAME=document_management
-DB_USER=docuser
-DB_PASSWORD=<database-password>
-DB_HOST=mysql
-DB_PORT=3306
-```
-
-Optional PostgreSQL configuration:
+Current PostgreSQL configuration:
 
 ```text
 DB_ENGINE=postgresql
@@ -138,6 +128,17 @@ DB_USER=docuser
 DB_PASSWORD=<database-password>
 DB_HOST=postgresql
 DB_PORT=5432
+```
+
+Optional MySQL rollback configuration:
+
+```text
+DB_ENGINE=mysql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=mysql
+DB_PORT=3306
 ```
 
 The models and migrations are shared across both backends. After switching
@@ -220,7 +221,7 @@ Then regenerate AI metadata on a document from the edit metadata page. The AI Su
 
 ## AI Embeddings and Semantic Search
 
-The application stores semantic embeddings in `DocumentChunk` records. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, and saved as JSON vectors in MySQL.
+The application stores semantic embeddings in `DocumentChunk` records. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, and saved as JSON vectors in the active database.
 
 Embeddings are generated automatically after upload when extracted text is available. If embedding generation fails, upload still succeeds and AI metadata suggestions continue.
 

@@ -13,12 +13,16 @@ flowchart TB
         Secret[docmanager-secrets Secret]
 
         subgraph Django_Deployment[Deployment: document-app]
-            Init[Init Container\nwait for MySQL + migrate]
+            Init[Init Container\nwait for database + migrate]
             Web[document-app Container\nGunicorn on port 8000]
         end
 
-        subgraph Database[Deployment: mysql]
-            DB[MySQL 8.0 Container\nport 3306]
+        subgraph Database[Deployment: postgresql]
+            DB[PostgreSQL 16 Container\nport 5432]
+        end
+
+        subgraph Rollback_DB[Deployment: mysql scaled to 0]
+            MySQL[MySQL 8.0 Container\nport 3306]
         end
 
         subgraph AI_Local[Deployment: ollama]
@@ -26,7 +30,8 @@ flowchart TB
         end
 
         Media[(Media PVC)]
-        DBPVC[(MySQL PVC)]
+        DBPVC[(PostgreSQL PVC)]
+        MySQLPVC[(MySQL PVC)]
         ModelPVC[(Ollama Model PVC)]
 
         Config --> Init
@@ -38,6 +43,7 @@ flowchart TB
         Web --> DB
         Web --> Media
         DB --> DBPVC
+        MySQL --> MySQLPVC
         Ollama --> ModelPVC
         Web --> Ollama
     end
@@ -57,16 +63,17 @@ flowchart TB
 | --- | --- |
 | ConfigMap | Stores non-secret runtime configuration. |
 | Secret | Stores database credentials, Okta secrets, Gemini API keys, AWS credentials, and sensitive values. |
-| Init Container | Waits for MySQL availability and runs Django migrations before startup. |
+| Init Container | Waits for the configured database and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
-| mysql | Default persistent relational database service. |
-| PostgreSQL | Optional relational database backend selected by environment. |
+| PostgreSQL | Active persistent relational database service. |
+| mysql | Optional rollback database backend retained with its PVC. |
 | ollama | Optional local AI inference service. |
 | Gemini API | Optional external AI metadata provider. |
 | AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
 | AWS Bedrock Titan Embeddings V2 | Optional embedding provider for semantic AI search. |
 | Media PVC | Persistent storage for uploaded files. |
-| MySQL PVC | Persistent database storage. |
+| PostgreSQL PVC | Active persistent database storage. |
+| MySQL PVC | Retained rollback database storage. |
 | Ollama Model PVC | Persistent AI model storage. |
 
 ## Deployment Flow
@@ -75,6 +82,7 @@ flowchart TB
 sequenceDiagram
     participant Admin
     participant OpenShift
+    participant PostgreSQL
     participant MySQL
     participant Django
     participant Ollama
@@ -85,13 +93,13 @@ sequenceDiagram
     Admin->>OpenShift: Start Django build
     OpenShift->>Django: Build application image
 
-    Admin->>OpenShift: Apply mysql deployment
-    OpenShift->>MySQL: Start MySQL pod
+    Admin->>OpenShift: Apply postgresql deployment
+    OpenShift->>PostgreSQL: Start PostgreSQL pod
 
     Admin->>OpenShift: Apply document-app deployment
     OpenShift->>Django: Start init container
-    Django->>MySQL: Wait for database
-    Django->>MySQL: Run migrations
+    Django->>PostgreSQL: Wait for database
+    Django->>PostgreSQL: Run migrations
     OpenShift->>Django: Start Gunicorn container
 
     Admin->>OpenShift: Apply ollama deployment
@@ -154,22 +162,8 @@ are printed per document and do not stop the entire batch.
 
 ## Database Backend Selection
 
-The container can run against either MySQL or PostgreSQL. The active backend is
-selected with `DB_ENGINE`.
-
-MySQL remains the default so existing OpenShift deployments continue to work
-without changes:
-
-```text
-DB_ENGINE=mysql
-DB_NAME=document_management
-DB_USER=docuser
-DB_PASSWORD=<database-password>
-DB_HOST=mysql
-DB_PORT=3306
-```
-
-To run against PostgreSQL, provide PostgreSQL-friendly environment variables:
+The container can run against either PostgreSQL or MySQL. The active backend is
+selected with `DB_ENGINE`. PostgreSQL is the current active OpenShift backend:
 
 ```text
 DB_ENGINE=postgresql
@@ -180,14 +174,25 @@ DB_HOST=postgresql
 DB_PORT=5432
 ```
 
+MySQL remains available as a rollback backend:
+
+```text
+DB_ENGINE=mysql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=mysql
+DB_PORT=3306
+```
+
 For OpenShift, keep non-secret values in the ConfigMap and credentials in the
-Secret. Example live switch for a PostgreSQL service named `postgresql`:
+Secret. Example live switch back to MySQL:
 
 ```powershell
 oc set env deployment/document-app `
-  DB_ENGINE=postgresql `
-  DB_HOST=postgresql `
-  DB_PORT=5432 `
+  DB_ENGINE=mysql `
+  DB_HOST=mysql `
+  DB_PORT=3306 `
   DB_NAME=document_management `
   DB_USER=docuser
 ```
@@ -207,14 +212,15 @@ oc exec deployment/document-app -- python manage.py migrate
 oc exec deployment/document-app -- python manage.py check
 ```
 
-The Django models are unchanged. The same migrations are used for both MySQL
-and PostgreSQL.
+The Django models are unchanged. The same migrations are used for PostgreSQL
+and MySQL.
 
 ## Persistent Storage Design
 
 ```mermaid
 flowchart LR
-    MySQL[(MySQL Pod)] --> DBPVC[(mysql-pvc)]
+    PostgreSQL[(PostgreSQL Pod)] --> DBPVC[(postgresql-pvc)]
+    MySQL[(MySQL Pod, scaled to 0)] -. rollback .-> MySQLPVC[(mysql-pvc)]
     Django[Django Pod] --> MediaPVC[(docmanager-media-pvc)]
     Ollama[Ollama Pod] --> ModelPVC[(ollama-models-pvc)]
     Django --> Gemini[Google Gemini API]
