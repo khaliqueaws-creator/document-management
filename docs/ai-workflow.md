@@ -12,7 +12,7 @@ sequenceDiagram
     participant Django
     participant Media as Media PVC
     participant OCR as Text Extraction / OCR
-    participant AI as Gemini or Ollama
+    participant AI as AI Provider
     participant DB as MySQL
 
     Loader->>Django: Upload document + metadata
@@ -67,9 +67,11 @@ flowchart LR
 
     Provider -->|gemini| Gemini[Google Gemini API]
     Provider -->|ollama| Ollama[Local Ollama Service]
+    Provider -->|bedrock| Bedrock[AWS Bedrock Nova Lite]
 
     Gemini --> Suggestions[AI Suggestions]
     Ollama --> Suggestions
+    Bedrock --> Suggestions
 
     Suggestions --> Review[Human Review Workflow]
 ```
@@ -100,6 +102,7 @@ The application stores AI-generated metadata separately from official metadata.
 | ai_department | Suggested business department |
 | ai_tags | Suggested tags |
 | ai_summary | AI-generated document summary |
+| ai_metadata_provider | Provider that generated the suggestion |
 | ai_suggestion_status | Tracks review state |
 | ai_suggested_at | Timestamp of generation |
 | ai_error | Error information if generation fails |
@@ -116,16 +119,18 @@ Benefits:
 - Supports auditability.
 - Allows safe experimentation with local and external AI providers.
 
-## Gemini vs Ollama
+## AI Provider Options
 
 | Provider | Advantage | Tradeoff |
 | --- | --- | --- |
 | Gemini | Better metadata quality and reasoning | Sends data externally |
+| AWS Bedrock Nova Lite | AWS-managed model access through boto3 | Requires AWS credentials, permissions, and model access |
 | Ollama | Local/private inference | Limited by local CPU and memory |
 
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
+- AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.

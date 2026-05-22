@@ -7,8 +7,9 @@ This runbook reflects the current implementation:
 - Django runs as `deployment/document-app` with Gunicorn.
 - MySQL runs as `deployment/mysql`.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
-- Gemini can be used instead of Ollama by setting `AI_METADATA_PROVIDER=gemini`.
-- Gemini is the preferred provider for the current demo because it produces better metadata suggestions than the tiny CRC-friendly Ollama model.
+- Gemini can be used by setting `AI_METADATA_PROVIDER=gemini`.
+- AWS Bedrock Nova Lite can be used by setting `AI_METADATA_PROVIDER=bedrock`.
+- Gemini and Bedrock are external provider options; Ollama remains the local/private CRC-friendly option.
 - The current CRC-friendly AI model is `qwen2.5:0.5b`.
 - AI metadata suggestions are generated during upload when `AUTO_AI_METADATA_ON_UPLOAD` is enabled.
 - The public demo URL is `https://docsdemo.khalique.net/` through Cloudflare Tunnel, while the OpenShift route host remains `document-app-document-app.apps-crc.testing`.
@@ -62,8 +63,8 @@ Then update:
 
 | File | What To Check |
 | --- | --- |
-| `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database name, user, passwords, host, and port. |
-| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, provider toggle, Ollama settings, Gemini settings, and AI upload behavior. |
+| `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database values, Gemini API key, and AWS credential placeholders. |
+| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, provider toggle, Ollama settings, Gemini settings, Bedrock settings, and AI upload behavior. |
 | `openshift/docmanager-deployment.yaml` | Probe `Host` header. It must also appear in `ALLOWED_HOSTS`. |
 
 Current public URL values:

@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses MySQL for metadata, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and a switchable AI metadata provider using either Gemini or Ollama.
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses MySQL for metadata, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and a switchable AI metadata provider using Ollama, Gemini, or AWS Bedrock Nova Lite.
 
 ## Current OpenShift CRC Architecture
 
@@ -22,8 +22,9 @@ flowchart TB
     App --> Tesseract[Tesseract OCR]
 
     App --> AIChoice{AI Metadata Provider}
-    AIChoice --> Gemini[Gemini API]
     AIChoice --> OllamaSvc[Ollama Service]
+    AIChoice --> Gemini[Gemini API]
+    AIChoice --> Bedrock[AWS Bedrock Nova Lite]
     OllamaSvc --> Ollama[Ollama Pod]
     Ollama --> OllamaPVC[(ollama-models-pvc)]
 ```
@@ -42,6 +43,7 @@ flowchart TB
 | docmanager-media-pvc | Persists uploaded document files. |
 | Tesseract OCR | Extracts text from image files and scanned documents. |
 | Gemini API | External AI metadata provider for higher-quality suggestions. |
+| AWS Bedrock Nova Lite | External AI metadata provider accessed through boto3 and AWS credentials. |
 | Ollama Service / Pod | Local AI metadata provider for private/offline model execution. |
 | ollama-models-pvc | Persists downloaded Ollama models. |
 | Okta OIDC | Handles authentication and provides group claims for application roles. |
@@ -77,6 +79,11 @@ flowchart TB
 
     App --> ModelPVC[(Ollama Model PVC)]
     ModelPVC --> Models[Local AI Models]
+
+    App --> AIProviderConfig[AI Provider Configuration]
+    AIProviderConfig --> Ollama[Ollama]
+    AIProviderConfig --> Gemini[Gemini]
+    AIProviderConfig --> Bedrock[AWS Bedrock Nova Lite]
 ```
 
 ## Design Notes
@@ -85,5 +92,6 @@ flowchart TB
 - Metadata, extracted text, AI suggestion status, and audit history are stored in MySQL.
 - AI suggestions are staged separately from official metadata until accepted by a Loader or Admin user.
 - Gemini is useful when external API processing is acceptable.
+- AWS Bedrock Nova Lite is useful when AWS-managed model access is preferred.
 - Ollama is useful when local/private processing is preferred.
 - The application is intentionally structured to support future enhancements such as semantic search, RAG, background jobs, document versioning, and workflow approvals.

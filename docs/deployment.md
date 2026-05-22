@@ -41,6 +41,14 @@ flowchart TB
         Ollama --> ModelPVC
         Web --> Ollama
     end
+
+    subgraph AI_External[External AI Providers]
+        Gemini[Google Gemini API]
+        Bedrock[AWS Bedrock Nova Lite]
+    end
+
+    Web --> Gemini
+    Web --> Bedrock
 ```
 
 ## Deployment Components
@@ -48,11 +56,13 @@ flowchart TB
 | Component | Purpose |
 | --- | --- |
 | ConfigMap | Stores non-secret runtime configuration. |
-| Secret | Stores database credentials, Okta secrets, Gemini API keys, and sensitive values. |
+| Secret | Stores database credentials, Okta secrets, Gemini API keys, AWS credentials, and sensitive values. |
 | Init Container | Waits for MySQL availability and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
 | mysql | Persistent relational database service. |
 | ollama | Optional local AI inference service. |
+| Gemini API | Optional external AI metadata provider. |
+| AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
 | Media PVC | Persistent storage for uploaded files. |
 | MySQL PVC | Persistent database storage. |
 | Ollama Model PVC | Persistent AI model storage. |
@@ -66,6 +76,8 @@ sequenceDiagram
     participant MySQL
     participant Django
     participant Ollama
+    participant Gemini
+    participant Bedrock
 
     Admin->>OpenShift: Apply ConfigMap and Secrets
     Admin->>OpenShift: Start Django build
@@ -82,6 +94,9 @@ sequenceDiagram
 
     Admin->>OpenShift: Apply ollama deployment
     OpenShift->>Ollama: Start Ollama pod
+
+    Django->>Gemini: Optional external metadata generation
+    Django->>Bedrock: Optional external metadata generation
 ```
 
 ## Persistent Storage Design
@@ -91,6 +106,8 @@ flowchart LR
     MySQL[(MySQL Pod)] --> DBPVC[(mysql-pvc)]
     Django[Django Pod] --> MediaPVC[(docmanager-media-pvc)]
     Ollama[Ollama Pod] --> ModelPVC[(ollama-models-pvc)]
+    Django --> Gemini[Google Gemini API]
+    Django --> Bedrock[AWS Bedrock Nova Lite]
 ```
 
 ## Operational Notes
