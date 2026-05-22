@@ -102,14 +102,29 @@ WSGI_APPLICATION = 'docmanager.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
+DB_ENGINE = os.environ.get("DB_ENGINE", "mysql").lower()
+
+if DB_ENGINE in ("mysql", "mariadb"):
+    DATABASE_BACKEND = "django.db.backends.mysql"
+    DEFAULT_DB_HOST = "mysql"
+    DEFAULT_DB_PORT = "3306"
+elif DB_ENGINE in ("postgres", "postgresql"):
+    DATABASE_BACKEND = "django.db.backends.postgresql"
+    DEFAULT_DB_HOST = "postgresql"
+    DEFAULT_DB_PORT = "5432"
+else:
+    raise RuntimeError(
+        "Unsupported DB_ENGINE. Use 'mysql' or 'postgresql'."
+    )
+
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.mysql",
+        "ENGINE": DATABASE_BACKEND,
         "NAME": os.environ.get("DB_NAME", "document_management"),
         "USER": os.environ.get("DB_USER", "docuser"),
         "PASSWORD": os.environ.get("DB_PASSWORD", "docpass"),
-        "HOST": os.environ.get("DB_HOST", "mysql"),
-        "PORT": os.environ.get("DB_PORT", "3306"),
+        "HOST": os.environ.get("DB_HOST", DEFAULT_DB_HOST),
+        "PORT": os.environ.get("DB_PORT", DEFAULT_DB_PORT),
     }
 }
 

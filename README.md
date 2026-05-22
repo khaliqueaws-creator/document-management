@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
+A Django-based intelligent document management application deployed on OpenShift CRC with MySQL or PostgreSQL, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
 
 The public demo path used during development is:
 
@@ -80,7 +80,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Frontend | Django templates, server-rendered HTML/CSS |
 | Backend | Python, Django |
 | App server | Gunicorn |
-| Database | MySQL |
+| Database | MySQL by default, PostgreSQL optional |
 | File storage | OpenShift PersistentVolumeClaim |
 | OCR | Tesseract, pdf2image, Pillow |
 | Document parsing | pypdf, python-docx, openpyxl |
@@ -100,8 +100,8 @@ Browser
   -> Cloudflare Tunnel / OpenShift Route
   -> document-app Service
   -> Gunicorn + Django
-  -> MySQL Service
-  -> MySQL PVC
+  -> MySQL or PostgreSQL Service
+  -> Database PVC
 
 Django
   -> document media PVC
@@ -112,7 +112,42 @@ Django
   -> DocumentChunk rows in MySQL
 ```
 
-The Django application and MySQL run as separate OpenShift deployments. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application and database run as separate OpenShift deployments. MySQL is the default backend, and PostgreSQL can be enabled with `DB_ENGINE=postgresql`. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+
+## Database Backend Selection
+
+The application chooses its Django database backend from `DB_ENGINE`.
+
+Default MySQL configuration:
+
+```text
+DB_ENGINE=mysql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=mysql
+DB_PORT=3306
+```
+
+Optional PostgreSQL configuration:
+
+```text
+DB_ENGINE=postgresql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=postgresql
+DB_PORT=5432
+```
+
+The models and migrations are shared across both backends. After switching
+database settings, restart the app and run migrations:
+
+```powershell
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+oc exec deployment/document-app -- python manage.py migrate
+```
 
 ## Switching AI Metadata Providers
 

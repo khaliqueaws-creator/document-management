@@ -5,6 +5,7 @@ metadata:
 data:
   DJANGO_DEBUG: "False"
   DJANGO_SECURE_SSL_REDIRECT: "False"
+  DB_ENGINE: "mysql"
   MAX_UPLOAD_SIZE_MB: "20"
   DOCUMENTS_PER_PAGE: "10"
   AI_METADATA_PROVIDER: "ollama"

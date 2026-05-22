@@ -59,7 +59,8 @@ flowchart TB
 | Secret | Stores database credentials, Okta secrets, Gemini API keys, AWS credentials, and sensitive values. |
 | Init Container | Waits for MySQL availability and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
-| mysql | Persistent relational database service. |
+| mysql | Default persistent relational database service. |
+| PostgreSQL | Optional relational database backend selected by environment. |
 | ollama | Optional local AI inference service. |
 | Gemini API | Optional external AI metadata provider. |
 | AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
@@ -150,6 +151,64 @@ oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 
 Successful output should show documents processed with chunks created. Errors
 are printed per document and do not stop the entire batch.
+
+## Database Backend Selection
+
+The container can run against either MySQL or PostgreSQL. The active backend is
+selected with `DB_ENGINE`.
+
+MySQL remains the default so existing OpenShift deployments continue to work
+without changes:
+
+```text
+DB_ENGINE=mysql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=mysql
+DB_PORT=3306
+```
+
+To run against PostgreSQL, provide PostgreSQL-friendly environment variables:
+
+```text
+DB_ENGINE=postgresql
+DB_NAME=document_management
+DB_USER=docuser
+DB_PASSWORD=<database-password>
+DB_HOST=postgresql
+DB_PORT=5432
+```
+
+For OpenShift, keep non-secret values in the ConfigMap and credentials in the
+Secret. Example live switch for a PostgreSQL service named `postgresql`:
+
+```powershell
+oc set env deployment/document-app `
+  DB_ENGINE=postgresql `
+  DB_HOST=postgresql `
+  DB_PORT=5432 `
+  DB_NAME=document_management `
+  DB_USER=docuser
+```
+
+Set the password through the existing secret key used by Django:
+
+```text
+DB_PASSWORD
+```
+
+After changing database backend settings, restart the app and run migrations:
+
+```powershell
+oc rollout restart deployment/document-app
+oc rollout status deployment/document-app
+oc exec deployment/document-app -- python manage.py migrate
+oc exec deployment/document-app -- python manage.py check
+```
+
+The Django models are unchanged. The same migrations are used for both MySQL
+and PostgreSQL.
 
 ## Persistent Storage Design
 
