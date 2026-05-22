@@ -316,21 +316,10 @@ GEMINI_BASE_URL: "https://generativelanguage.googleapis.com"
 GEMINI_MODEL: "gemini-2.5-flash"
 ```
 
-If `AI_METADATA_PROVIDER` is not already `gemini`, switch with a patch file to avoid PowerShell quoting problems:
+If `AI_METADATA_PROVIDER` is not already `gemini`, switch the live deployment with `oc set env`:
 
 ```powershell
-@'
-{
-  "data": {
-    "AI_METADATA_PROVIDER": "gemini"
-  }
-}
-'@ | Set-Content -Encoding utf8 ai-provider-patch.json
-
-oc patch configmap docmanager-config --type=merge --patch-file ai-provider-patch.json
-Remove-Item ai-provider-patch.json
-
-oc rollout restart deployment/document-app
+oc set env deployment/document-app AI_METADATA_PROVIDER=gemini
 oc rollout status deployment/document-app
 ```
 
@@ -347,18 +336,7 @@ oc exec deployment/document-app -- printenv GEMINI_BASE_URL
 Use this when you want local/private AI processing:
 
 ```powershell
-@'
-{
-  "data": {
-    "AI_METADATA_PROVIDER": "ollama"
-  }
-}
-'@ | Set-Content -Encoding utf8 ai-provider-patch.json
-
-oc patch configmap docmanager-config --type=merge --patch-file ai-provider-patch.json
-Remove-Item ai-provider-patch.json
-
-oc rollout restart deployment/document-app
+oc set env deployment/document-app AI_METADATA_PROVIDER=ollama
 oc rollout status deployment/document-app
 ```
 

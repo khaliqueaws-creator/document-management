@@ -112,6 +112,8 @@ gemini
 bedrock
 ```
 
+For PowerShell, use `oc set env` on the deployment. This is the quickest live switch and avoids JSON patch quoting issues.
+
 Check the current provider in OpenShift:
 
 ```powershell
@@ -121,18 +123,13 @@ oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
 Switch to Ollama:
 
 ```powershell
-oc set env deployment/document-app `
-  AI_METADATA_PROVIDER=ollama `
-  OLLAMA_BASE_URL=http://ollama:11434 `
-  OLLAMA_MODEL=qwen2.5:0.5b
+oc set env deployment/document-app AI_METADATA_PROVIDER=ollama
 ```
 
 Switch to Gemini:
 
 ```powershell
-oc set env deployment/document-app `
-  AI_METADATA_PROVIDER=gemini `
-  GEMINI_MODEL=gemini-2.5-flash
+oc set env deployment/document-app AI_METADATA_PROVIDER=gemini
 ```
 
 Gemini also requires `GEMINI_API_KEY` in `secret/docmanager-secrets`.
@@ -140,8 +137,16 @@ Gemini also requires `GEMINI_API_KEY` in `secret/docmanager-secrets`.
 Switch to AWS Bedrock Nova Lite:
 
 ```powershell
+oc set env deployment/document-app AI_METADATA_PROVIDER=bedrock
+```
+
+Set model-specific values only when changing them from the configured defaults:
+
+```powershell
 oc set env deployment/document-app `
-  AI_METADATA_PROVIDER=bedrock `
+  OLLAMA_BASE_URL=http://ollama:11434 `
+  OLLAMA_MODEL=qwen2.5:0.5b `
+  GEMINI_MODEL=gemini-2.5-flash `
   AWS_REGION=us-east-1 `
   BEDROCK_NOVA_MODEL_ID=amazon.nova-lite-v1:0
 ```
