@@ -170,6 +170,22 @@ GEMINI_BASE_URL = os.environ.get(
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 AI_METADATA_MAX_CHARS = int(os.environ.get("AI_METADATA_MAX_CHARS", "2500"))
+
+# AWS Bedrock Phase 3 settings. Credentials are intentionally not configured
+# here; boto3 should use the standard AWS credential provider chain.
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+BEDROCK_NOVA_MODEL_ID = os.environ.get(
+    "BEDROCK_NOVA_MODEL_ID",
+    "amazon.nova-lite-v1:0",
+)
+BEDROCK_EMBED_MODEL_ID = os.environ.get(
+    "BEDROCK_EMBED_MODEL_ID",
+    "amazon.titan-embed-text-v2:0",
+)
+BEDROCK_TIMEOUT_SECONDS = int(os.environ.get("BEDROCK_TIMEOUT_SECONDS", "90"))
+AI_EMBEDDING_MAX_CHARS = int(os.environ.get("AI_EMBEDDING_MAX_CHARS", "2500"))
+AI_SEARCH_TOP_K = int(os.environ.get("AI_SEARCH_TOP_K", "5"))
+
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",
     "True",

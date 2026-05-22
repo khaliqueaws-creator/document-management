@@ -11,6 +11,9 @@ class Document(models.Model):
     AI_STATUS_ACCEPTED = "accepted"
     AI_STATUS_REJECTED = "rejected"
     AI_STATUS_FAILED = "failed"
+    AI_PROVIDER_OLLAMA = "ollama"
+    AI_PROVIDER_GEMINI = "gemini"
+    AI_PROVIDER_BEDROCK = "bedrock"
 
     OCR_LANGUAGE_CHOICES = [
         (OCR_LANGUAGE_ENGLISH, "English"),
@@ -24,6 +27,11 @@ class Document(models.Model):
         (AI_STATUS_ACCEPTED, "Accepted"),
         (AI_STATUS_REJECTED, "Rejected"),
         (AI_STATUS_FAILED, "Failed"),
+    ]
+    AI_METADATA_PROVIDER_CHOICES = [
+        (AI_PROVIDER_OLLAMA, "Ollama"),
+        (AI_PROVIDER_GEMINI, "Gemini"),
+        (AI_PROVIDER_BEDROCK, "AWS Bedrock Nova Lite"),
     ]
 
     document_type = models.CharField(max_length=100, blank=True)
@@ -46,6 +54,11 @@ class Document(models.Model):
     ai_department = models.CharField(max_length=100, blank=True)
     ai_tags = models.CharField(max_length=255, blank=True)
     ai_summary = models.TextField(blank=True)
+    ai_metadata_provider = models.CharField(
+        max_length=20,
+        choices=AI_METADATA_PROVIDER_CHOICES,
+        blank=True,
+    )
     ai_suggestion_status = models.CharField(
         max_length=20,
         choices=AI_SUGGESTION_STATUS_CHOICES,

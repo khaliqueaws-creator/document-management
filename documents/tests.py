@@ -1,3 +1,5 @@
+import json
+from io import BytesIO
 from unittest.mock import Mock, patch
 
 from django.test import SimpleTestCase, override_settings
@@ -6,6 +8,7 @@ from .ai_metadata import (
     MetadataSuggestionError,
     parse_metadata_json_response,
     suggest_metadata,
+    suggest_metadata_with_bedrock,
     suggest_metadata_with_gemini,
     suggest_metadata_with_ollama,
 )
@@ -32,6 +35,23 @@ class MetadataSuggestionTests(SimpleTestCase):
     def test_parse_ollama_json_response_rejects_invalid_json(self):
         with self.assertRaises(MetadataSuggestionError):
             parse_metadata_json_response("not json")
+
+    def test_parse_metadata_json_response_accepts_wrapped_json(self):
+        suggestions = parse_metadata_json_response(
+            """
+            ```json
+            {
+                "document_type": "Report",
+                "department": "Operations",
+                "tags": "report, operations",
+                "summary": "Operations report."
+            }
+            ```
+            """
+        )
+
+        self.assertEqual(suggestions["document_type"], "Report")
+        self.assertEqual(suggestions["department"], "Operations")
 
     def test_suggest_metadata_requires_extracted_text(self):
         with self.assertRaisesMessage(
@@ -122,6 +142,73 @@ class MetadataSuggestionTests(SimpleTestCase):
             kwargs["json"]["generationConfig"]["responseMimeType"],
             "application/json",
         )
+
+    @override_settings(
+        AI_METADATA_MAX_CHARS=20,
+        AWS_REGION="us-east-1",
+        BEDROCK_NOVA_MODEL_ID="amazon.nova-lite-v1:0",
+        BEDROCK_TIMEOUT_SECONDS=45,
+    )
+    @patch("documents.ai_metadata.boto3.client")
+    def test_suggest_metadata_calls_bedrock_nova_lite(self, mock_client):
+        client = Mock()
+        client.invoke_model.return_value = {
+            "body": BytesIO(
+                json.dumps(
+                    {
+                        "output": {
+                            "message": {
+                                "content": [
+                                    {
+                                        "text": (
+                                            '{"document_type": "Report", '
+                                            '"department": "Operations", '
+                                            '"tags": "report, operations", '
+                                            '"summary": "Operations report."}'
+                                        )
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ).encode("utf-8")
+            )
+        }
+        mock_client.return_value = client
+
+        suggestions = suggest_metadata_with_bedrock(
+            "An operations report with extra text beyond the limit"
+        )
+
+        self.assertEqual(suggestions["document_type"], "Report")
+        self.assertEqual(suggestions["department"], "Operations")
+        mock_client.assert_called_once()
+        client_args, client_kwargs = mock_client.call_args
+        self.assertEqual(client_args[0], "bedrock-runtime")
+        self.assertEqual(client_kwargs["region_name"], "us-east-1")
+        client.invoke_model.assert_called_once()
+        _, invoke_kwargs = client.invoke_model.call_args
+        self.assertEqual(
+            invoke_kwargs["modelId"],
+            "amazon.nova-lite-v1:0",
+        )
+        self.assertEqual(invoke_kwargs["contentType"], "application/json")
+        self.assertEqual(invoke_kwargs["accept"], "application/json")
+        body = json.loads(invoke_kwargs["body"])
+        prompt = body["messages"][0]["content"][0]["text"]
+        self.assertIn("An operations report", prompt)
+        self.assertNotIn("extra text beyond", prompt)
+
+    @override_settings(AI_METADATA_PROVIDER="bedrock")
+    @patch("documents.ai_metadata.suggest_metadata_with_bedrock")
+    def test_suggest_metadata_dispatches_to_bedrock(self, mock_bedrock):
+        mock_bedrock.return_value = {"document_type": "Report"}
+
+        self.assertEqual(
+            suggest_metadata("Some document text"),
+            {"document_type": "Report"},
+        )
+        mock_bedrock.assert_called_once_with("Some document text")
 
     @override_settings(AI_METADATA_PROVIDER="unknown")
     def test_suggest_metadata_rejects_unknown_provider(self):

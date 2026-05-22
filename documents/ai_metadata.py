@@ -1,6 +1,9 @@
 import json
 
+import boto3
 import requests
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 
 
@@ -47,6 +50,26 @@ def clean_suggestion_value(value, max_length=None):
     return value
 
 
+def load_metadata_json_object(response_text):
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+
+        for index, character in enumerate(response_text):
+            if character != "{":
+                continue
+
+            try:
+                parsed, _ = decoder.raw_decode(response_text[index:])
+            except json.JSONDecodeError:
+                continue
+
+            return parsed
+
+        raise
+
+
 def parse_metadata_json_response(response_text):
     response_text = (response_text or "").strip()
 
@@ -54,7 +77,7 @@ def parse_metadata_json_response(response_text):
         raise MetadataSuggestionError("AI provider returned an empty response.")
 
     try:
-        parsed = json.loads(response_text)
+        parsed = load_metadata_json_object(response_text)
     except json.JSONDecodeError as error:
         raise MetadataSuggestionError(
             "AI provider returned invalid JSON."
@@ -117,6 +140,31 @@ def parse_gemini_response_text(payload):
 
     if not response_text:
         raise MetadataSuggestionError("Gemini returned an empty response.")
+
+    return response_text
+
+
+def parse_bedrock_response_text(payload):
+    if not isinstance(payload, dict):
+        raise MetadataSuggestionError("Bedrock returned an invalid response.")
+
+    content = (
+        payload.get("output", {})
+        .get("message", {})
+        .get("content", [])
+    )
+
+    if not isinstance(content, list):
+        raise MetadataSuggestionError("Bedrock returned an invalid response.")
+
+    response_text = "".join(
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict)
+    ).strip()
+
+    if not response_text:
+        raise MetadataSuggestionError("Bedrock returned an empty response.")
 
     return response_text
 
@@ -224,6 +272,66 @@ def suggest_metadata_with_gemini(text):
     return parse_metadata_json_response(parse_gemini_response_text(payload))
 
 
+def suggest_metadata_with_bedrock(text):
+    text = (text or "").strip()
+
+    if not text:
+        raise MetadataSuggestionError(
+            "No extracted text is available for metadata suggestions."
+        )
+
+    prompt = build_metadata_prompt(text[:settings.AI_METADATA_MAX_CHARS])
+
+    try:
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=settings.AWS_REGION,
+            config=Config(
+                connect_timeout=settings.BEDROCK_TIMEOUT_SECONDS,
+                read_timeout=settings.BEDROCK_TIMEOUT_SECONDS,
+            ),
+        )
+        response = client.invoke_model(
+            modelId=settings.BEDROCK_NOVA_MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"text": prompt},
+                            ],
+                        },
+                    ],
+                    "inferenceConfig": {
+                        "temperature": 0.2,
+                        "maxTokens": 1000,
+                    },
+                }
+            ),
+        )
+    except (BotoCoreError, ClientError) as error:
+        raise MetadataSuggestionError(
+            f"Unable to reach Bedrock: {error}"
+        ) from error
+
+    response_body = response.get("body")
+
+    if response_body is None:
+        raise MetadataSuggestionError("Bedrock returned an invalid response.")
+
+    try:
+        payload = json.loads(response_body.read())
+    except (AttributeError, TypeError, ValueError) as error:
+        raise MetadataSuggestionError(
+            "Bedrock returned a non-JSON API response."
+        ) from error
+
+    return parse_metadata_json_response(parse_bedrock_response_text(payload))
+
+
 def suggest_metadata(text):
     provider = settings.AI_METADATA_PROVIDER
 
@@ -232,6 +340,9 @@ def suggest_metadata(text):
 
     if provider == "gemini":
         return suggest_metadata_with_gemini(text)
+
+    if provider == "bedrock":
+        return suggest_metadata_with_bedrock(text)
 
     raise MetadataSuggestionError(
         f"Unsupported AI metadata provider: {provider}"

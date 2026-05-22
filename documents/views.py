@@ -90,11 +90,14 @@ def get_ai_metadata_source_text(document):
 
 
 def store_ai_metadata_suggestions(document):
+    provider = settings.AI_METADATA_PROVIDER
     document.ai_suggestion_status = Document.AI_STATUS_PENDING
+    document.ai_metadata_provider = provider
     document.ai_error = ""
     document.save(
         update_fields=[
             "ai_suggestion_status",
+            "ai_metadata_provider",
             "ai_error",
         ]
     )
@@ -116,6 +119,7 @@ def store_ai_metadata_suggestions(document):
             "ai_department",
             "ai_tags",
             "ai_summary",
+            "ai_metadata_provider",
             "ai_suggestion_status",
             "ai_suggested_at",
             "ai_error",
@@ -595,10 +599,15 @@ def edit_document_metadata(request, document_id):
         form = DocumentMetadataForm(instance=document)
 
     file_extension = os.path.splitext(document.file.name)[1].lower()
+    active_provider = settings.AI_METADATA_PROVIDER
+    active_provider_label = dict(
+        Document.AI_METADATA_PROVIDER_CHOICES
+    ).get(active_provider, active_provider)
 
     return render(request, "edit_metadata.html", {
         "document": document,
         "form": form,
+        "active_ai_metadata_provider_label": active_provider_label,
         "can_preview_inline": file_extension in [
             ".png",
             ".jpg",

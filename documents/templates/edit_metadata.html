@@ -63,6 +63,8 @@
 
         {% if document.ai_suggestion_status == "suggested" or document.ai_suggestion_status == "accepted" or document.ai_suggestion_status == "rejected" %}
             <dl class="metadata-list compact-metadata-list">
+                <dt>Provider</dt>
+                <dd>{{ document.get_ai_metadata_provider_display|default:active_ai_metadata_provider_label }}</dd>
                 <dt>Document Type</dt>
                 <dd>{{ document.ai_document_type|default:"-" }}</dd>
                 <dt>Department</dt>
@@ -82,6 +84,10 @@
             <p class="note">
                 Metadata suggestion failed.
             </p>
+            <dl class="metadata-list compact-metadata-list">
+                <dt>Provider</dt>
+                <dd>{{ document.get_ai_metadata_provider_display|default:active_ai_metadata_provider_label }}</dd>
+            </dl>
             {% if document.ai_error %}
             <p class="muted-text">
                 {{ document.ai_error }}
@@ -90,6 +96,9 @@
         {% else %}
             <p class="note">
                 No AI suggestion is available for this document.
+            </p>
+            <p class="muted-text">
+                Active provider: {{ active_ai_metadata_provider_label }}
             </p>
         {% endif %}
 
