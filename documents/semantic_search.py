@@ -1,5 +1,6 @@
 import numpy as np
 from django.conf import settings
+from pgvector.django import CosineDistance
 
 from .embeddings import get_titan_embedding
 from .models import DocumentChunk
@@ -39,11 +40,14 @@ def search_documents_by_meaning(query, top_k=None):
     chunks = (
         DocumentChunk.objects
         .select_related("document")
-        .exclude(embedding=[])
+        .exclude(embedding_vector__isnull=True)
+        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .annotate(distance=CosineDistance("embedding_vector", query_embedding))
+        .order_by("distance")[:top_k * 20]
     )
 
     for chunk in chunks:
-        score = cosine_similarity(query_embedding, chunk.embedding)
+        score = 1 - float(chunk.distance)
 
         if score <= 0:
             continue

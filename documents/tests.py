@@ -304,6 +304,7 @@ class DocumentEmbeddingTests(SimpleTestCase):
             "First paragraph.",
         )
         self.assertEqual(len(first_create["embedding"]), 1024)
+        self.assertEqual(len(first_create["embedding_vector"]), 1024)
         self.assertEqual(
             first_create["embedding_model"],
             "amazon.titan-embed-text-v2:0",
@@ -378,7 +379,8 @@ class SemanticSearchTests(SimpleTestCase):
         mock_embedding,
     ):
         mock_embedding.return_value = [1, 0]
-        mock_select_related.return_value.exclude.return_value = []
+        queryset = mock_select_related.return_value
+        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = []
 
         self.assertEqual(search_documents_by_meaning("employee onboarding"), [])
 
@@ -393,26 +395,28 @@ class SemanticSearchTests(SimpleTestCase):
         mock_embedding.return_value = [1, 0]
         onboarding_document = Mock()
         finance_document = Mock()
-        mock_select_related.return_value.exclude.return_value = [
+        chunks = [
             SimpleNamespace(
                 document_id=1,
                 document=onboarding_document,
                 chunk_text="Employee onboarding checklist",
-                embedding=[0.9, 0.1],
+                distance=0.01,
             ),
             SimpleNamespace(
                 document_id=2,
                 document=finance_document,
                 chunk_text="Vendor payment invoice",
-                embedding=[0, 1],
+                distance=1.0,
             ),
             SimpleNamespace(
                 document_id=1,
                 document=onboarding_document,
                 chunk_text="Employee orientation benefits",
-                embedding=[1, 0],
+                distance=0.0,
             ),
         ]
+        queryset = mock_select_related.return_value
+        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = chunks
 
         results = search_documents_by_meaning("employee onboarding")
 
@@ -434,20 +438,22 @@ class SemanticSearchTests(SimpleTestCase):
         mock_embedding.return_value = [1, 0]
         first_document = Mock()
         second_document = Mock()
-        mock_select_related.return_value.exclude.return_value = [
+        chunks = [
             SimpleNamespace(
                 document_id=1,
                 document=first_document,
                 chunk_text="Best match",
-                embedding=[1, 0],
+                distance=0.0,
             ),
             SimpleNamespace(
                 document_id=2,
                 document=second_document,
                 chunk_text="Second match",
-                embedding=[0.8, 0.2],
+                distance=0.02,
             ),
         ]
+        queryset = mock_select_related.return_value
+        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = chunks
 
         results = search_documents_by_meaning("employee onboarding")
 

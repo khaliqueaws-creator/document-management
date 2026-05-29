@@ -560,7 +560,12 @@ def search_documents(request):
 def ai_search(request):
     query = (request.GET.get("q") or "").strip()
     results = []
-    has_embeddings = DocumentChunk.objects.exclude(embedding=[]).exists()
+    has_embeddings = (
+        DocumentChunk.objects
+        .exclude(embedding_vector__isnull=True)
+        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .exists()
+    )
 
     if query and has_embeddings:
         try:

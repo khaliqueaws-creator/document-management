@@ -103,7 +103,7 @@ oc get istag document-app:latest
 
 ### 4. Apply Resources
 
-Apply PostgreSQL resources first. PostgreSQL reads database values from `docmanager-secrets`.
+Apply PostgreSQL resources first. The PostgreSQL deployment uses the `pgvector/pgvector:pg16` image so Django migrations can enable the `vector` extension for semantic search. PostgreSQL reads database values from `docmanager-secrets`.
 
 ```powershell
 oc apply -f openshift/docmanager-secret-template.yaml

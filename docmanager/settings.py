@@ -102,19 +102,15 @@ WSGI_APPLICATION = 'docmanager.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DB_ENGINE = os.environ.get("DB_ENGINE", "mysql").lower()
+DB_ENGINE = os.environ.get("DB_ENGINE", "postgresql").lower()
 
-if DB_ENGINE in ("mysql", "mariadb"):
-    DATABASE_BACKEND = "django.db.backends.mysql"
-    DEFAULT_DB_HOST = "mysql"
-    DEFAULT_DB_PORT = "3306"
-elif DB_ENGINE in ("postgres", "postgresql"):
+if DB_ENGINE in ("postgres", "postgresql"):
     DATABASE_BACKEND = "django.db.backends.postgresql"
     DEFAULT_DB_HOST = "postgresql"
     DEFAULT_DB_PORT = "5432"
 else:
     raise RuntimeError(
-        "Unsupported DB_ENGINE. Use 'mysql' or 'postgresql'."
+        "Unsupported DB_ENGINE. Use 'postgresql'."
     )
 
 DATABASES = {
@@ -199,6 +195,7 @@ BEDROCK_EMBED_MODEL_ID = os.environ.get(
 )
 BEDROCK_TIMEOUT_SECONDS = int(os.environ.get("BEDROCK_TIMEOUT_SECONDS", "90"))
 AI_EMBEDDING_MAX_CHARS = int(os.environ.get("AI_EMBEDDING_MAX_CHARS", "2500"))
+AI_EMBEDDING_DIMENSIONS = int(os.environ.get("AI_EMBEDDING_DIMENSIONS", "1024"))
 AI_SEARCH_TOP_K = int(os.environ.get("AI_SEARCH_TOP_K", "5"))
 
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(

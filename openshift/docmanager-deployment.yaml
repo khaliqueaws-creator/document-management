@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
         - name: migrate
-          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          image: docker.io/khalique/document-app:1.1
           command:
             - /bin/sh
             - -c
@@ -50,7 +50,7 @@ spec:
               mountPath: /app/media
       containers:
         - name: document-app
-          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          image: docker.io/khalique/document-app:1.1
           command:
             - gunicorn
             - docmanager.wsgi:application

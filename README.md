@@ -113,11 +113,12 @@ Django
   -> DocumentChunk rows in PostgreSQL
 ```
 
-The Django application and database run as separate OpenShift deployments. PostgreSQL is the active OpenShift database with `DB_ENGINE=postgresql`. MySQL support remains available through `DB_ENGINE=mysql` and the MySQL manifests are retained as a rollback option. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application and database run as separate OpenShift deployments. PostgreSQL with pgvector is the active database with `DB_ENGINE=postgresql`. Semantic vector search depends on PostgreSQL pgvector, and the application image no longer includes MySQL runtime support. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
-## Database Backend Selection
+## Database Backend
 
-The application chooses its Django database backend from `DB_ENGINE`.
+The application uses PostgreSQL. `DB_ENGINE` defaults to `postgresql`; other
+database engines are not supported by the current application image.
 
 Current PostgreSQL configuration:
 
@@ -128,21 +129,10 @@ DB_USER=docuser
 DB_PASSWORD=<database-password>
 DB_HOST=postgresql
 DB_PORT=5432
+AI_EMBEDDING_DIMENSIONS=1024
 ```
 
-Optional MySQL rollback configuration:
-
-```text
-DB_ENGINE=mysql
-DB_NAME=document_management
-DB_USER=docuser
-DB_PASSWORD=<database-password>
-DB_HOST=mysql
-DB_PORT=3306
-```
-
-The models and migrations are shared across both backends. After switching
-database settings, restart the app and run migrations:
+After changing database settings, restart the app and run migrations:
 
 ```powershell
 oc rollout restart deployment/document-app

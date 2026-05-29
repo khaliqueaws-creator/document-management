@@ -1,4 +1,5 @@
 from django.db import models
+from pgvector.django import VectorField
 
 
 class Document(models.Model):
@@ -80,6 +81,11 @@ class DocumentChunk(models.Model):
     chunk_index = models.PositiveIntegerField()
     chunk_text = models.TextField()
     embedding = models.JSONField(default=list, blank=True)
+    embedding_vector = VectorField(
+        dimensions=1024,
+        null=True,
+        blank=True,
+    )
     embedding_model = models.CharField(max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
