@@ -1,7 +1,7 @@
 import json
 from io import BytesIO
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from django.test import SimpleTestCase, override_settings
 
@@ -19,8 +19,16 @@ from .embeddings import (
     get_titan_embedding,
     rebuild_document_embeddings,
 )
+from .opensearch_indexing import (
+    OpenSearchIndexingError,
+    build_chunk_payload,
+    build_document_payload,
+    delete_document as delete_indexed_document,
+    ensure_indexes,
+    index_document,
+)
 from .semantic_search import cosine_similarity, search_documents_by_meaning
-from .views import try_rebuild_document_embeddings
+from .views import try_rebuild_document_embeddings, try_reindex_document
 
 
 class MetadataSuggestionTests(SimpleTestCase):
@@ -359,6 +367,175 @@ class UploadEmbeddingHookTests(SimpleTestCase):
 
         self.assertFalse(rebuilt)
         mock_rebuild.assert_not_called()
+
+
+class OpenSearchIndexingTests(SimpleTestCase):
+    def test_build_document_payload_uses_canonical_document_fields(self):
+        uploaded_at = SimpleNamespace(
+            isoformat=Mock(return_value="2026-05-30T12:00:00+00:00")
+        )
+        document = Mock(
+            id=42,
+            file=SimpleNamespace(name="documents/policy.pdf"),
+            document_type="Policy",
+            document_subtype="HR",
+            department="People",
+            author="Admin",
+            description="Benefits policy",
+            tags="benefits, hr",
+            uploaded_at=uploaded_at,
+            ai_document_type="Policy",
+            ai_department="People",
+            ai_tags="benefits",
+            ai_summary="Policy summary",
+            ai_metadata_provider="bedrock",
+            ai_suggestion_status="suggested",
+        )
+
+        payload = build_document_payload(document)
+
+        self.assertEqual(payload["document_id"], 42)
+        self.assertEqual(payload["file_name"], "documents/policy.pdf")
+        self.assertEqual(payload["document_type"], "Policy")
+        self.assertEqual(payload["ai_summary"], "Policy summary")
+        self.assertEqual(payload["uploaded_at"], "2026-05-30T12:00:00+00:00")
+
+    def test_build_chunk_payload_denormalizes_document_metadata(self):
+        document = Mock(
+            id=42,
+            file=SimpleNamespace(name="documents/policy.pdf"),
+            document_type="Policy",
+            document_subtype="HR",
+            department="People",
+            author="Admin",
+            tags="benefits, hr",
+            uploaded_at=None,
+        )
+        chunk = Mock(
+            id=99,
+            document=document,
+            chunk_index=3,
+            chunk_text="Chunk text",
+            embedding=[0.1, 0.2],
+            embedding_model="amazon.titan-embed-text-v2:0",
+        )
+
+        payload = build_chunk_payload(chunk)
+
+        self.assertEqual(payload["document_id"], 42)
+        self.assertEqual(payload["chunk_id"], 99)
+        self.assertEqual(payload["chunk_index"], 3)
+        self.assertEqual(payload["department"], "People")
+        self.assertEqual(payload["embedding"], [0.1, 0.2])
+
+    @override_settings(
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    def test_ensure_indexes_creates_missing_indexes(self):
+        client = Mock()
+        client.indices.exists.side_effect = [False, False]
+
+        ensure_indexes(client=client)
+
+        self.assertEqual(client.indices.create.call_count, 2)
+        created_indexes = [
+            call.kwargs["index"]
+            for call in client.indices.create.call_args_list
+        ]
+        self.assertEqual(
+            created_indexes,
+            ["docmanager-documents", "docmanager-document-chunks"],
+        )
+
+    @override_settings(OPENSEARCH_DOCUMENT_INDEX="docmanager-documents")
+    def test_index_document_wraps_client_errors(self):
+        client = Mock()
+        client.index.side_effect = RuntimeError("connection failed")
+        document = Mock(id=42, file=None)
+
+        with self.assertRaises(OpenSearchIndexingError):
+            index_document(document, client=client)
+
+    @override_settings(
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    def test_delete_document_removes_document_and_chunks(self):
+        client = Mock()
+
+        delete_indexed_document(42, client=client)
+
+        client.delete.assert_called_once_with(
+            index="docmanager-documents",
+            id="42",
+            ignore=[404],
+            refresh=False,
+        )
+        client.delete_by_query.assert_called_once()
+        self.assertEqual(
+            client.delete_by_query.call_args.kwargs["body"],
+            {"query": {"term": {"document_id": 42}}},
+        )
+
+
+class OpenSearchViewHookTests(SimpleTestCase):
+    @override_settings(OPENSEARCH_INDEX_ON_SAVE=True)
+    @patch("documents.views.reindex_document")
+    def test_reindex_hook_indexes_document_when_enabled(self, mock_reindex):
+        request = Mock()
+        document = Mock()
+
+        indexed = try_reindex_document(request, document)
+
+        self.assertTrue(indexed)
+        mock_reindex.assert_called_once_with(document, create_indexes=True)
+
+    @override_settings(OPENSEARCH_INDEX_ON_SAVE=True)
+    @patch("documents.views.messages.warning")
+    @patch("documents.views.reindex_document")
+    def test_reindex_hook_warns_without_raising(
+        self,
+        mock_reindex,
+        mock_warning,
+    ):
+        mock_reindex.side_effect = OpenSearchIndexingError("unavailable")
+        request = Mock()
+        document = Mock()
+
+        indexed = try_reindex_document(request, document)
+
+        self.assertFalse(indexed)
+        mock_warning.assert_called_once()
+
+
+class ReindexOpenSearchCommandTests(SimpleTestCase):
+    @patch("documents.management.commands.reindex_opensearch.reindex_document")
+    @patch("documents.management.commands.reindex_opensearch.ensure_indexes")
+    @patch("documents.management.commands.reindex_opensearch.get_opensearch_client")
+    @patch("documents.management.commands.reindex_opensearch.Document")
+    def test_reindex_command_processes_documents(
+        self,
+        mock_document_model,
+        mock_get_client,
+        mock_ensure_indexes,
+        mock_reindex,
+    ):
+        from documents.management.commands.reindex_opensearch import Command
+
+        document = Mock(id=42, file=SimpleNamespace(name="documents/a.pdf"))
+        queryset = MagicMock()
+        mock_document_model.objects.all.return_value.order_by.return_value = queryset
+        queryset.__iter__.return_value = iter([document])
+        client = Mock()
+        mock_get_client.return_value = client
+        mock_reindex.return_value = 2
+
+        command = Command()
+        command.handle(document_id=None, limit=None, create_indexes=True)
+
+        mock_ensure_indexes.assert_called_once_with(client=client)
+        mock_reindex.assert_called_once_with(document, client=client)
 
 
 class SemanticSearchTests(SimpleTestCase):

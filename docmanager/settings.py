@@ -197,6 +197,26 @@ BEDROCK_TIMEOUT_SECONDS = int(os.environ.get("BEDROCK_TIMEOUT_SECONDS", "90"))
 AI_EMBEDDING_MAX_CHARS = int(os.environ.get("AI_EMBEDDING_MAX_CHARS", "2500"))
 AI_EMBEDDING_DIMENSIONS = int(os.environ.get("AI_EMBEDDING_DIMENSIONS", "1024"))
 AI_SEARCH_TOP_K = int(os.environ.get("AI_SEARCH_TOP_K", "5"))
+OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL", "http://opensearch:9200")
+OPENSEARCH_INDEX_PREFIX = os.environ.get(
+    "OPENSEARCH_INDEX_PREFIX",
+    "docmanager",
+)
+OPENSEARCH_DOCUMENT_INDEX = os.environ.get(
+    "OPENSEARCH_DOCUMENT_INDEX",
+    f"{OPENSEARCH_INDEX_PREFIX}-documents",
+)
+OPENSEARCH_CHUNK_INDEX = os.environ.get(
+    "OPENSEARCH_CHUNK_INDEX",
+    f"{OPENSEARCH_INDEX_PREFIX}-document-chunks",
+)
+OPENSEARCH_TIMEOUT_SECONDS = int(
+    os.environ.get("OPENSEARCH_TIMEOUT_SECONDS", "10")
+)
+OPENSEARCH_INDEX_ON_SAVE = os.environ.get(
+    "OPENSEARCH_INDEX_ON_SAVE",
+    "True",
+).lower() in ("1", "true", "yes")
 
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",

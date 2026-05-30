@@ -19,6 +19,11 @@ from .forms import (
 from .ai_metadata import MetadataSuggestionError, suggest_metadata
 from .embeddings import EmbeddingError, rebuild_document_embeddings
 from .models import AuditEvent, Document, DocumentChunk
+from .opensearch_indexing import (
+    OpenSearchIndexingError,
+    delete_document as delete_indexed_document,
+    reindex_document,
+)
 from .semantic_search import search_documents_by_meaning
 from .auth import oauth
 from .permissions import (
@@ -159,6 +164,38 @@ def try_rebuild_document_embeddings(request, document):
         messages.warning(
             request,
             "Document uploaded, but search embeddings could not be generated."
+        )
+        return False
+
+    return True
+
+
+def try_reindex_document(request, document):
+    if not settings.OPENSEARCH_INDEX_ON_SAVE:
+        return False
+
+    try:
+        reindex_document(document, create_indexes=True)
+    except OpenSearchIndexingError:
+        messages.warning(
+            request,
+            "Document saved, but OpenSearch indexing could not be completed."
+        )
+        return False
+
+    return True
+
+
+def try_delete_indexed_document(request, document_id):
+    if not settings.OPENSEARCH_INDEX_ON_SAVE:
+        return False
+
+    try:
+        delete_indexed_document(document_id)
+    except OpenSearchIndexingError:
+        messages.warning(
+            request,
+            "Document deleted, but OpenSearch cleanup could not be completed."
         )
         return False
 
@@ -332,6 +369,7 @@ def upload_document(request):
                 document.save()
 
             try_rebuild_document_embeddings(request, document)
+            try_reindex_document(request, document)
 
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
@@ -490,6 +528,7 @@ def confirm_document(request):
 
         document.save()
         try_rebuild_document_embeddings(request, document)
+        try_reindex_document(request, document)
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         if try_store_ai_metadata_suggestions(document):
@@ -641,6 +680,7 @@ def edit_document_metadata(request, document_id):
                     "after": after_metadata,
                 },
             )
+            try_reindex_document(request, document)
             return redirect("search")
 
     else:
@@ -773,7 +813,9 @@ def delete_document(request, document_id):
             AuditEvent.ACTION_DELETE,
             audit_metadata,
         )
+        document_id = document.id
         document.delete()
+        try_delete_indexed_document(request, document_id)
 
         return redirect("/")
 

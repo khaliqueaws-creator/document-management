@@ -25,3 +25,4 @@ pdf2image
 openpyxl
 PyJWT==2.10.1
 gunicorn
+opensearch-py
