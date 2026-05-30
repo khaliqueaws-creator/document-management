@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cloudflare-url-update
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: update-cname
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        envFrom:
+        - configMapRef:
+            name: docmanager-config
+        - secretRef:
+            name: docmanager-secrets
+        args:
+        - |
+          AUTH_HEADER="Authorization: Bearer $CLOUD_FLARE_TOKEN"
+          CONTENT_HEADER="Content-Type: application/json"
+          FIND_URL="https://api.cloudflare.com/client/v4/zones/$CLOUD_FLARE_ZONEID/dns_records?type=CNAME&name=$CLOUD_FLARE_REC"
+          RECORD_ID=$(curl -s -X GET -H "$AUTH_HEADER" -H "$CONTENT_HEADER" "$FIND_URL" | grep -o '"id":"[^"]*"' | head -1 | cut -d':' -f2 | tr -d '"')
+          UPDATE_URL="https://api.cloudflare.com/client/v4/zones/$CLOUD_FLARE_ZONEID/dns_records/$RECORD_ID"
+          curl -s -X PUT -H "$AUTH_HEADER" -H "$CONTENT_HEADER" --data "{\"type\":\"CNAME\",\"name\":\"$CLOUD_FLARE_REC\",\"content\":\"$CLOUD_FLARE_TARGET\",\"ttl\":1,\"proxied\":true}" "$UPDATE_URL"
