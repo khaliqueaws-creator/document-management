@@ -27,6 +27,7 @@ This runbook reflects the current implementation:
 | [C. Stop CRC And Start CRC Then Check App](#c-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
 | [D. PostgreSQL Active With MySQL Rollback](#d-postgresql-active-with-mysql-rollback) | You want to verify PostgreSQL or roll back to MySQL. |
 | [E. Some Troubleshooting Tips](#e-some-troubleshooting-tips) | Pods, routes, migrations, probes, Ollama, or login checks are failing. |
+| [F. Issue Log](#f-issue-log) | Known CRC/OpenShift issues and the exact recovery steps used. |
 
 ## A. Rebuild From Scratch
 
@@ -165,7 +166,58 @@ oc exec deployment/ollama -- ollama list
 oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
 ```
 
-### 6. Verify The App
+### 6. Apply OpenSearch And OpenSearch Dashboards
+
+OpenSearch and OpenSearch Dashboards use upstream images that expect to run with UID/GID `1000`. On OpenShift CRC, grant `anyuid` to both service accounts before or immediately after applying the manifests. The grant requires a CRC admin login.
+
+If `oc` is not on `PATH`, load CRC's bundled client in the current PowerShell session:
+
+```powershell
+& crc oc-env | Invoke-Expression
+```
+
+Log in as the local CRC admin. Get the current password from CRC rather than saving it in this file:
+
+```powershell
+crc console --credentials
+oc login -u kubeadmin -p <password-from-crc> https://api.crc.testing:6443
+oc project docmanager
+```
+
+Apply OpenSearch:
+
+```powershell
+oc apply -f openshift/opensearch-pvc.yaml
+oc apply -f openshift/opensearch-deployment.yaml
+oc adm policy add-scc-to-user anyuid -z opensearch -n docmanager
+oc rollout restart deployment/opensearch
+oc rollout status deployment/opensearch
+```
+
+Apply OpenSearch Dashboards:
+
+```powershell
+oc apply -f openshift/opensearch-dashboards-deployment.yaml
+oc adm policy add-scc-to-user anyuid -z opensearch-dashboards -n docmanager
+oc rollout restart deployment/opensearch-dashboards
+oc rollout status deployment/opensearch-dashboards
+```
+
+Verify:
+
+```powershell
+oc get pods -l app=opensearch
+oc get pods -l app=opensearch-dashboards
+oc logs deployment/opensearch-dashboards --tail=100
+```
+
+Expected Dashboards status:
+
+```text
+opensearch-dashboards-...   1/1   Running   0
+```
+
+### 7. Verify The App
 
 Check OpenShift objects:
 
@@ -537,6 +589,7 @@ oc get secret docmanager-secrets
 | Ollama pod says `Insufficient memory` or `model requires more system memory` | Use the smaller default `qwen2.5:0.5b`, reapply the config map and Ollama deployment, then recreate `job/ollama-pull-model`. |
 | Ollama rollout has one running old pod and one pending new pod | Scale `deployment/ollama` to zero, wait for pods to delete, then scale back to one. |
 | Ollama returns HTTP 500 to Django | Run `oc logs deployment/ollama --since=2m` and test direct generation with `oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"`. |
+| OpenSearch Dashboards is `CrashLoopBackOff` with `opensearch-dashboards-docker-entrypoint.sh: Permission denied` | Grant `anyuid` to `opensearch-dashboards`, restart the deployment, and confirm the new ReplicaSet reaches `1/1 Running`. |
 
 ### Logs And Details
 
@@ -579,3 +632,46 @@ oc logs job/docmanager-migrate
 | `mysql-pvc` | Stored local database data |
 | `docmanager-media-pvc` | Uploaded media files |
 | `ollama-models-pvc` | Downloaded Ollama models |
+
+## F. Issue Log
+
+### OpenSearch Dashboards CrashLoopBackOff On CRC
+
+Observed symptom:
+
+```text
+exec container process `/usr/share/opensearch-dashboards/./opensearch-dashboards-docker-entrypoint.sh`: Permission denied
+```
+
+Root cause:
+
+OpenShift CRC admitted the pod under the restricted SCC with a namespace-assigned random UID. The upstream `opensearchproject/opensearch-dashboards:3.3.0` image could not execute or read its entrypoint under that UID. The fixed manifest runs the container as UID/GID `1000`, which requires the `anyuid` SCC.
+
+Recovery process:
+
+```powershell
+& crc oc-env | Invoke-Expression
+crc console --credentials
+oc login -u kubeadmin -p <password-from-crc> https://api.crc.testing:6443
+oc project docmanager
+
+oc adm policy add-scc-to-user anyuid -z opensearch-dashboards -n docmanager
+oc apply -f openshift/opensearch-dashboards-deployment.yaml
+oc rollout restart deployment/opensearch-dashboards
+oc rollout status deployment/opensearch-dashboards
+```
+
+Validation:
+
+```powershell
+oc get pods -l app=opensearch-dashboards -o wide
+oc get deployment opensearch-dashboards
+oc logs deployment/opensearch-dashboards --tail=100
+```
+
+Expected result:
+
+```text
+deployment "opensearch-dashboards" successfully rolled out
+opensearch-dashboards   READY 1/1   AVAILABLE 1
+```
