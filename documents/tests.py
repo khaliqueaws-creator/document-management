@@ -1,8 +1,10 @@
 import json
-from io import BytesIO
+from io import BytesIO, StringIO
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 
 from .ai_metadata import (
@@ -21,14 +23,18 @@ from .embeddings import (
 )
 from .opensearch_indexing import (
     OpenSearchIndexingError,
+    build_metadata_filter_query,
     build_chunk_payload,
     build_document_payload,
     delete_document as delete_indexed_document,
     ensure_indexes,
+    get_chunk_mapping,
+    get_document_mapping,
     index_document,
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
 from .views import try_rebuild_document_embeddings, try_reindex_document
+from .views import accept_ai_metadata, reject_ai_metadata
 
 
 class MetadataSuggestionTests(SimpleTestCase):
@@ -312,7 +318,6 @@ class DocumentEmbeddingTests(SimpleTestCase):
             "First paragraph.",
         )
         self.assertEqual(len(first_create["embedding"]), 1024)
-        self.assertEqual(len(first_create["embedding_vector"]), 1024)
         self.assertEqual(
             first_create["embedding_model"],
             "amazon.titan-embed-text-v2:0",
@@ -383,6 +388,8 @@ class OpenSearchIndexingTests(SimpleTestCase):
             author="Admin",
             description="Benefits policy",
             tags="benefits, hr",
+            extracted_text="Full extracted policy text",
+            ocr_text="OCR policy text",
             uploaded_at=uploaded_at,
             ai_document_type="Policy",
             ai_department="People",
@@ -398,6 +405,12 @@ class OpenSearchIndexingTests(SimpleTestCase):
         self.assertEqual(payload["file_name"], "documents/policy.pdf")
         self.assertEqual(payload["document_type"], "Policy")
         self.assertEqual(payload["ai_summary"], "Policy summary")
+        self.assertEqual(payload["tags_list"], ["benefits", "hr"])
+        self.assertEqual(payload["ai_tags_list"], ["benefits"])
+        self.assertEqual(payload["extracted_text"], "Full extracted policy text")
+        self.assertEqual(payload["ocr_text"], "OCR policy text")
+        self.assertIn("Full extracted policy text", payload["searchable_text"])
+        self.assertIn("Policy summary", payload["searchable_text"])
         self.assertEqual(payload["uploaded_at"], "2026-05-30T12:00:00+00:00")
 
     def test_build_chunk_payload_denormalizes_document_metadata(self):
@@ -409,6 +422,12 @@ class OpenSearchIndexingTests(SimpleTestCase):
             department="People",
             author="Admin",
             tags="benefits, hr",
+            ai_document_type="Policy",
+            ai_department="People",
+            ai_tags="benefits",
+            ai_summary="Policy summary",
+            ai_metadata_provider="bedrock",
+            ai_suggestion_status="suggested",
             uploaded_at=None,
         )
         chunk = Mock(
@@ -427,6 +446,58 @@ class OpenSearchIndexingTests(SimpleTestCase):
         self.assertEqual(payload["chunk_index"], 3)
         self.assertEqual(payload["department"], "People")
         self.assertEqual(payload["embedding"], [0.1, 0.2])
+        self.assertEqual(payload["tags_list"], ["benefits", "hr"])
+        self.assertEqual(payload["ai_tags_list"], ["benefits"])
+        self.assertEqual(payload["ai_department"], "People")
+        self.assertIn("Chunk text", payload["searchable_text"])
+        self.assertIn("Policy summary", payload["searchable_text"])
+
+    @override_settings(AI_EMBEDDING_DIMENSIONS=1024)
+    def test_mappings_include_searchable_text_metadata_and_embeddings(self):
+        document_properties = get_document_mapping()["mappings"]["properties"]
+        chunk_properties = get_chunk_mapping()["mappings"]["properties"]
+
+        self.assertEqual(document_properties["extracted_text"]["type"], "text")
+        self.assertEqual(document_properties["ocr_text"]["type"], "text")
+        self.assertEqual(document_properties["department"]["type"], "keyword")
+        self.assertEqual(document_properties["tags_list"]["type"], "keyword")
+        self.assertEqual(chunk_properties["document_id"]["type"], "integer")
+        self.assertEqual(chunk_properties["chunk_text"]["type"], "text")
+        self.assertEqual(chunk_properties["embedding"]["type"], "knn_vector")
+        self.assertEqual(chunk_properties["embedding"]["dimension"], 1024)
+        self.assertEqual(chunk_properties["ai_department"]["type"], "keyword")
+        self.assertEqual(chunk_properties["ai_tags_list"]["type"], "keyword")
+
+    def test_build_metadata_filter_query_applies_filter_clauses(self):
+        query = build_metadata_filter_query({
+            "document_type": "Policy",
+            "department": "People",
+            "author": "Admin",
+            "tags": "benefits",
+            "uploaded_from": "2026-01-01",
+            "uploaded_to": "2026-12-31",
+        })
+
+        clauses = query["bool"]["filter"]
+
+        self.assertIn({"term": {"document_type": "Policy"}}, clauses)
+        self.assertIn({"term": {"department": "People"}}, clauses)
+        self.assertIn({"term": {"author.raw": "Admin"}}, clauses)
+        self.assertIn({"term": {"tags_list": "benefits"}}, clauses)
+        self.assertIn(
+            {
+                "range": {
+                    "uploaded_at": {
+                        "gte": "2026-01-01",
+                        "lte": "2026-12-31",
+                    }
+                }
+            },
+            clauses,
+        )
+
+    def test_build_metadata_filter_query_returns_match_all_without_filters(self):
+        self.assertEqual(build_metadata_filter_query({}), {"match_all": {}})
 
     @override_settings(
         OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
@@ -446,6 +517,30 @@ class OpenSearchIndexingTests(SimpleTestCase):
         self.assertEqual(
             created_indexes,
             ["docmanager-documents", "docmanager-document-chunks"],
+        )
+
+    @override_settings(
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    def test_ensure_indexes_updates_existing_index_mappings(self):
+        client = Mock()
+        client.indices.exists.side_effect = [True, True]
+
+        ensure_indexes(client=client)
+
+        self.assertEqual(client.indices.put_mapping.call_count, 2)
+        updated_indexes = [
+            call.kwargs["index"]
+            for call in client.indices.put_mapping.call_args_list
+        ]
+        self.assertEqual(
+            updated_indexes,
+            ["docmanager-documents", "docmanager-document-chunks"],
+        )
+        self.assertIn(
+            "searchable_text",
+            client.indices.put_mapping.call_args_list[0].kwargs["body"]["properties"],
         )
 
     @override_settings(OPENSEARCH_DOCUMENT_INDEX="docmanager-documents")
@@ -509,6 +604,98 @@ class OpenSearchViewHookTests(SimpleTestCase):
         mock_warning.assert_called_once()
 
 
+class SourceOfTruthViewFlowTests(SimpleTestCase):
+    def get_loader_request(self):
+        return Mock(
+            method="POST",
+            session={
+                "user": {
+                    "groups": ["DocumentLoader"],
+                    "name": "Loader",
+                    "email": "loader@example.com",
+                }
+            },
+        )
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+    )
+    @patch("documents.views.messages.success")
+    @patch("documents.views.record_audit_event")
+    @patch("documents.views.try_reindex_document")
+    @patch("documents.views.Document.objects.get")
+    def test_accept_ai_metadata_saves_postgres_before_reindexing(
+        self,
+        mock_get,
+        mock_reindex,
+        mock_audit,
+        mock_success,
+    ):
+        request = self.get_loader_request()
+        document = Mock(
+            id=42,
+            document_type="Old",
+            document_subtype="",
+            department="Old department",
+            author="Admin",
+            tags="old",
+            ocr_language="english",
+            file=SimpleNamespace(name="documents/policy.pdf"),
+            ai_document_type="Policy",
+            ai_department="People",
+            ai_tags="benefits",
+            ai_summary="Policy summary",
+        )
+        call_order = []
+        document.save.side_effect = lambda *args, **kwargs: call_order.append("save")
+        document.refresh_from_db.side_effect = lambda: call_order.append("refresh")
+        mock_reindex.side_effect = lambda *args, **kwargs: call_order.append("reindex")
+        mock_get.return_value = document
+
+        accept_ai_metadata(request, 42)
+
+        self.assertEqual(document.document_type, "Policy")
+        self.assertEqual(document.department, "People")
+        self.assertEqual(document.tags, "benefits")
+        self.assertEqual(document.description, "Policy summary")
+        self.assertEqual(call_order, ["save", "refresh", "reindex"])
+        mock_reindex.assert_called_once_with(request, document)
+        mock_audit.assert_called_once()
+        mock_success.assert_called_once()
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+    )
+    @patch("documents.views.messages.info")
+    @patch("documents.views.try_reindex_document")
+    @patch("documents.views.Document.objects.get")
+    def test_reject_ai_metadata_saves_postgres_before_reindexing(
+        self,
+        mock_get,
+        mock_reindex,
+        mock_info,
+    ):
+        request = self.get_loader_request()
+        document = Mock(id=42)
+        call_order = []
+        document.save.side_effect = lambda *args, **kwargs: call_order.append("save")
+        document.refresh_from_db.side_effect = lambda: call_order.append("refresh")
+        mock_reindex.side_effect = lambda *args, **kwargs: call_order.append("reindex")
+        mock_get.return_value = document
+
+        reject_ai_metadata(request, 42)
+
+        self.assertEqual(document.ai_suggestion_status, "rejected")
+        self.assertEqual(call_order, ["save", "refresh", "reindex"])
+        document.save.assert_called_once_with(update_fields=["ai_suggestion_status"])
+        mock_reindex.assert_called_once_with(request, document)
+        mock_info.assert_called_once()
+
+
 class ReindexOpenSearchCommandTests(SimpleTestCase):
     @patch("documents.management.commands.reindex_opensearch.reindex_document")
     @patch("documents.management.commands.reindex_opensearch.ensure_indexes")
@@ -538,6 +725,85 @@ class ReindexOpenSearchCommandTests(SimpleTestCase):
         mock_reindex.assert_called_once_with(document, client=client)
 
 
+class ValidateBedrockOpenSearchCommandTests(SimpleTestCase):
+    @override_settings(
+        AWS_REGION="us-east-1",
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        AI_EMBEDDING_DIMENSIONS=1024,
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch.dict(
+        "os.environ",
+        {
+            "AWS_ACCESS_KEY_ID": "test-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret",
+        },
+    )
+    @patch("documents.management.commands.validate_bedrock_opensearch.Document")
+    @patch("documents.management.commands.validate_bedrock_opensearch.DocumentChunk")
+    @patch(
+        "documents.management.commands.validate_bedrock_opensearch."
+        "get_opensearch_client"
+    )
+    @patch(
+        "documents.management.commands.validate_bedrock_opensearch."
+        "get_titan_embedding"
+    )
+    def test_validate_command_checks_bedrock_db_and_opensearch(
+        self,
+        mock_embedding,
+        mock_get_client,
+        mock_document_chunk,
+        mock_document,
+    ):
+        mock_embedding.return_value = [0.1] * 1024
+        chunk = Mock(embedding=[0.2] * 1024)
+        queryset = MagicMock()
+        queryset.count.return_value = 1
+        queryset.iterator.return_value = iter([chunk])
+        mock_document_chunk.objects.exclude.return_value.filter.return_value = queryset
+        mock_document.objects.filter.return_value.exists.return_value = True
+        client = Mock()
+        client.count.return_value = {"count": 1}
+        client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {
+                        "_source": {
+                            "document_id": 42,
+                            "chunk_id": 99,
+                            "chunk_index": 0,
+                            "embedding": [0.3] * 1024,
+                            "embedding_model": "amazon.titan-embed-text-v2:0",
+                        }
+                    }
+                ]
+            }
+        }
+        mock_get_client.return_value = client
+        stdout = StringIO()
+
+        call_command("validate_bedrock_opensearch", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("Bedrock sample embedding dimensions=1024", output)
+        self.assertIn("db_chunks_with_embeddings=1", output)
+        self.assertIn("os_chunks=1", output)
+        self.assertIn("validation succeeded", output)
+        client.search.assert_called_once()
+        mock_document.objects.filter.assert_called_once_with(id=42)
+
+    @patch(
+        "documents.management.commands.validate_bedrock_opensearch."
+        "get_titan_embedding"
+    )
+    def test_validate_command_reports_bedrock_failures(self, mock_embedding):
+        mock_embedding.side_effect = EmbeddingError("Unable to reach Bedrock")
+
+        with self.assertRaises(CommandError):
+            call_command("validate_bedrock_opensearch", stdout=StringIO())
+
+
 class SemanticSearchTests(SimpleTestCase):
     def test_cosine_similarity_scores_matching_vectors(self):
         self.assertEqual(cosine_similarity([1, 0], [1, 0]), 1.0)
@@ -548,91 +814,119 @@ class SemanticSearchTests(SimpleTestCase):
         self.assertEqual(cosine_similarity([1, 0], [1]), 0.0)
         self.assertEqual(cosine_similarity(["bad"], [1]), 0.0)
 
+    @override_settings(
+        AI_SEARCH_TOP_K=5,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.semantic_search.Document.objects.in_bulk")
+    @patch("documents.semantic_search.get_opensearch_client")
     @patch("documents.semantic_search.get_titan_embedding")
-    @patch("documents.semantic_search.DocumentChunk.objects.select_related")
-    def test_search_documents_by_meaning_returns_empty_without_embeddings(
+    def test_search_documents_by_meaning_uses_opensearch_and_hydrates_documents(
         self,
-        mock_select_related,
         mock_embedding,
+        mock_get_client,
+        mock_in_bulk,
     ):
         mock_embedding.return_value = [1, 0]
-        queryset = mock_select_related.return_value
-        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = []
-
-        self.assertEqual(search_documents_by_meaning("employee onboarding"), [])
-
-    @override_settings(AI_SEARCH_TOP_K=5)
-    @patch("documents.semantic_search.get_titan_embedding")
-    @patch("documents.semantic_search.DocumentChunk.objects.select_related")
-    def test_search_documents_by_meaning_ranks_best_document(
-        self,
-        mock_select_related,
-        mock_embedding,
-    ):
-        mock_embedding.return_value = [1, 0]
-        onboarding_document = Mock()
-        finance_document = Mock()
-        chunks = [
-            SimpleNamespace(
-                document_id=1,
-                document=onboarding_document,
-                chunk_text="Employee onboarding checklist",
-                distance=0.01,
-            ),
-            SimpleNamespace(
-                document_id=2,
-                document=finance_document,
-                chunk_text="Vendor payment invoice",
-                distance=1.0,
-            ),
-            SimpleNamespace(
-                document_id=1,
-                document=onboarding_document,
-                chunk_text="Employee orientation benefits",
-                distance=0.0,
-            ),
-        ]
-        queryset = mock_select_related.return_value
-        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = chunks
+        document = Mock()
+        mock_in_bulk.return_value = {1: document}
+        client = Mock()
+        client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {
+                        "_score": 1.75,
+                        "_source": {
+                            "document_id": 1,
+                            "chunk_text": "Employee orientation benefits",
+                            "embedding_model": "amazon.titan-embed-text-v2:0",
+                        },
+                    },
+                    {
+                        "_score": 1.2,
+                        "_source": {
+                            "document_id": 2,
+                            "chunk_text": "Missing PostgreSQL document",
+                            "embedding_model": "amazon.titan-embed-text-v2:0",
+                        },
+                    },
+                ]
+            }
+        }
+        mock_get_client.return_value = client
 
         results = search_documents_by_meaning("employee onboarding")
 
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]["document"], onboarding_document)
+        self.assertEqual(results[0]["document"], document)
+        self.assertEqual(results[0]["score"], 1.75)
         self.assertEqual(
             results[0]["best_chunk"],
             "Employee orientation benefits",
         )
+        mock_in_bulk.assert_called_once()
+        search_body = client.search.call_args.kwargs["body"]
+        self.assertEqual(search_body["query"]["knn"]["embedding"]["vector"], [1, 0])
+        self.assertEqual(
+            search_body["query"]["knn"]["embedding"]["filter"],
+            {"term": {"embedding_model": "amazon.titan-embed-text-v2:0"}},
+        )
 
     @override_settings(AI_SEARCH_TOP_K=1)
+    @patch("documents.semantic_search.Document.objects.in_bulk")
+    @patch("documents.semantic_search.get_opensearch_client")
     @patch("documents.semantic_search.get_titan_embedding")
-    @patch("documents.semantic_search.DocumentChunk.objects.select_related")
-    def test_search_documents_by_meaning_limits_results(
+    def test_search_documents_by_meaning_limits_opensearch_results(
         self,
-        mock_select_related,
         mock_embedding,
+        mock_get_client,
+        mock_in_bulk,
     ):
         mock_embedding.return_value = [1, 0]
         first_document = Mock()
         second_document = Mock()
-        chunks = [
-            SimpleNamespace(
-                document_id=1,
-                document=first_document,
-                chunk_text="Best match",
-                distance=0.0,
-            ),
-            SimpleNamespace(
-                document_id=2,
-                document=second_document,
-                chunk_text="Second match",
-                distance=0.02,
-            ),
-        ]
-        queryset = mock_select_related.return_value
-        queryset.exclude.return_value.filter.return_value.annotate.return_value.order_by.return_value.__getitem__.return_value = chunks
+        mock_in_bulk.return_value = {1: first_document, 2: second_document}
+        client = Mock()
+        client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {"_score": 2.0, "_source": {"document_id": 1, "chunk_text": "Best"}},
+                    {"_score": 1.5, "_source": {"document_id": 2, "chunk_text": "Second"}},
+                ]
+            }
+        }
+        mock_get_client.return_value = client
 
         results = search_documents_by_meaning("employee onboarding")
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["document"], first_document)
+
+    @patch("documents.semantic_search.get_opensearch_client")
+    @patch("documents.semantic_search.get_titan_embedding")
+    def test_search_documents_by_meaning_wraps_opensearch_errors(
+        self,
+        mock_embedding,
+        mock_get_client,
+    ):
+        mock_embedding.return_value = [1, 0]
+        mock_get_client.return_value.search.side_effect = RuntimeError("down")
+
+        with self.assertRaises(EmbeddingError):
+            search_documents_by_meaning("employee onboarding")
+
+    @patch("documents.semantic_search.get_opensearch_client")
+    @patch("documents.semantic_search.get_titan_embedding")
+    def test_search_documents_by_meaning_wraps_opensearch_client_errors(
+        self,
+        mock_embedding,
+        mock_get_client,
+    ):
+        mock_embedding.return_value = [1, 0]
+        mock_get_client.side_effect = OpenSearchIndexingError(
+            "opensearch-py is not installed."
+        )
+
+        with self.assertRaises(EmbeddingError):
+            search_documents_by_meaning("employee onboarding")

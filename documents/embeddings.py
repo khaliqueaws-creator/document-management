@@ -124,7 +124,6 @@ def rebuild_document_embeddings(document):
             chunk_index=index,
             chunk_text=chunk,
             embedding=embedding,
-            embedding_vector=embedding,
             embedding_model=settings.BEDROCK_EMBED_MODEL_ID,
         )
 

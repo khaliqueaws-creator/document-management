@@ -374,11 +374,15 @@ def upload_document(request):
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
             if try_store_ai_metadata_suggestions(document):
+                document.refresh_from_db()
+                try_reindex_document(request, document)
                 messages.success(
                     request,
                     "AI metadata suggestions are ready for review."
                 )
             elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+                document.refresh_from_db()
+                try_reindex_document(request, document)
                 messages.warning(
                     request,
                     "Document uploaded, but AI metadata suggestions failed."
@@ -532,11 +536,15 @@ def confirm_document(request):
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         if try_store_ai_metadata_suggestions(document):
+            document.refresh_from_db()
+            try_reindex_document(request, document)
             messages.success(
                 request,
                 "AI metadata suggestions are ready for review."
             )
         elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+            document.refresh_from_db()
+            try_reindex_document(request, document)
             messages.warning(
                 request,
                 "Document saved, but AI metadata suggestions failed."
@@ -601,7 +609,7 @@ def ai_search(request):
     results = []
     has_embeddings = (
         DocumentChunk.objects
-        .exclude(embedding_vector__isnull=True)
+        .exclude(embedding=[])
         .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
         .exists()
     )
@@ -727,9 +735,13 @@ def generate_ai_metadata(request, document_id):
                 "ai_error",
             ]
         )
+        document.refresh_from_db()
+        try_reindex_document(request, document)
         messages.error(request, str(error))
         return redirect("edit_document_metadata", document_id=document.id)
 
+    document.refresh_from_db()
+    try_reindex_document(request, document)
     messages.success(request, "AI metadata suggestions generated.")
 
     return redirect("edit_document_metadata", document_id=document.id)
@@ -771,6 +783,7 @@ def accept_ai_metadata(request, document_id):
         },
     )
     messages.success(request, "AI suggestions accepted into metadata.")
+    try_reindex_document(request, document)
 
     return redirect("edit_document_metadata", document_id=document.id)
 
@@ -787,6 +800,8 @@ def reject_ai_metadata(request, document_id):
 
     document.ai_suggestion_status = Document.AI_STATUS_REJECTED
     document.save(update_fields=["ai_suggestion_status"])
+    document.refresh_from_db()
+    try_reindex_document(request, document)
     messages.info(request, "AI suggestions rejected.")
 
     return redirect("edit_document_metadata", document_id=document.id)

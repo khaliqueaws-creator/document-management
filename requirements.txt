@@ -11,7 +11,6 @@ joserfc==1.6.4
 numpy
 pycparser==3.0
 psycopg[binary]
-pgvector==0.4.2
 python-dotenv==1.2.2
 requests==2.33.1
 sqlparse==0.5.5

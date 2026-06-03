@@ -113,7 +113,7 @@ Django
   -> DocumentChunk rows in PostgreSQL
 ```
 
-The Django application and database run as separate OpenShift deployments. PostgreSQL with pgvector is the active database with `DB_ENGINE=postgresql`. Semantic vector search depends on PostgreSQL pgvector, and the application image no longer includes MySQL runtime support. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application and database run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval runs through OpenSearch; PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, and JSON embedding data used for reindexing. The application image no longer includes MySQL runtime support. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
 ## Database Backend
 
@@ -211,7 +211,7 @@ Then regenerate AI metadata on a document from the edit metadata page. The AI Su
 
 ## AI Embeddings and Semantic Search
 
-The application stores semantic embeddings in `DocumentChunk` records. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, and saved as JSON vectors in the active database.
+The application stores semantic embeddings in `DocumentChunk` records and indexes derived chunk vectors in OpenSearch. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, saved in PostgreSQL for rebuild/debug support, and indexed into OpenSearch for AI Search retrieval.
 
 Embeddings are generated automatically after upload when extracted text is available. If embedding generation fails, upload still succeeds and AI metadata suggestions continue.
 

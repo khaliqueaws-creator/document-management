@@ -1,9 +1,9 @@
 import numpy as np
 from django.conf import settings
-from pgvector.django import CosineDistance
 
-from .embeddings import get_titan_embedding
-from .models import DocumentChunk
+from .embeddings import EmbeddingError, get_titan_embedding
+from .models import Document
+from .opensearch_indexing import get_chunk_index_name, get_opensearch_client
 
 
 def cosine_similarity(vec1, vec2):
@@ -36,36 +36,82 @@ def search_documents_by_meaning(query, top_k=None):
         return []
 
     query_embedding = get_titan_embedding(query)
+
+    return search_documents_by_opensearch(query_embedding, top_k)
+
+
+def search_documents_by_opensearch(query_embedding, top_k):
+    try:
+        client = get_opensearch_client()
+        response = client.search(
+            index=get_chunk_index_name(),
+            body={
+                "size": top_k * 20,
+                "_source": [
+                    "document_id",
+                    "chunk_id",
+                    "chunk_index",
+                    "chunk_text",
+                    "embedding_model",
+                ],
+                "query": {
+                    "knn": {
+                        "embedding": {
+                            "vector": query_embedding,
+                            "k": top_k * 20,
+                            "filter": {
+                                "term": {
+                                    "embedding_model": (
+                                        settings.BEDROCK_EMBED_MODEL_ID
+                                    )
+                                }
+                            },
+                        }
+                    }
+                },
+            },
+        )
+    except Exception as error:
+        raise EmbeddingError(f"OpenSearch search failed: {error}") from error
+
     best_by_document_id = {}
-    chunks = (
-        DocumentChunk.objects
-        .select_related("document")
-        .exclude(embedding_vector__isnull=True)
-        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
-        .annotate(distance=CosineDistance("embedding_vector", query_embedding))
-        .order_by("distance")[:top_k * 20]
-    )
+    for hit in response.get("hits", {}).get("hits", []):
+        source = hit.get("_source", {})
+        document_id = source.get("document_id")
 
-    for chunk in chunks:
-        score = 1 - float(chunk.distance)
-
-        if score <= 0:
+        if document_id is None:
             continue
 
-        current = best_by_document_id.get(chunk.document_id)
+        score = float(hit.get("_score") or 0)
+        current = best_by_document_id.get(document_id)
         if current is not None and current["score"] >= score:
             continue
 
-        best_by_document_id[chunk.document_id] = {
-            "document": chunk.document,
+        best_by_document_id[document_id] = {
+            "document_id": document_id,
             "score": score,
-            "best_chunk": chunk.chunk_text,
+            "best_chunk": source.get("chunk_text", ""),
         }
 
-    results = sorted(
-        best_by_document_id.values(),
-        key=lambda item: item["score"],
-        reverse=True,
-    )
+    documents_by_id = Document.objects.in_bulk(best_by_document_id.keys())
+    results = []
 
-    return results[:top_k]
+    for item in sorted(
+        best_by_document_id.values(),
+        key=lambda result: result["score"],
+        reverse=True,
+    ):
+        document = documents_by_id.get(item["document_id"])
+        if document is None:
+            continue
+
+        results.append({
+            "document": document,
+            "score": item["score"],
+            "best_chunk": item["best_chunk"],
+        })
+
+        if len(results) == top_k:
+            break
+
+    return results

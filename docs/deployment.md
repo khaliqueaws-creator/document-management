@@ -83,7 +83,6 @@ sequenceDiagram
     participant Admin
     participant OpenShift
     participant PostgreSQL
-    participant MySQL
     participant Django
     participant Ollama
     participant Gemini
@@ -126,6 +125,27 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,
 or other supported boto3 credential providers.
+
+## PostgreSQL and OpenSearch Migration Path
+
+PostgreSQL no longer requires the `vector` extension. New deployments use the
+standard `postgres:16` image, and OpenSearch is the semantic/vector retrieval
+tier. PostgreSQL keeps canonical document metadata, lifecycle state, audit
+events, sessions, file references, chunk text, and JSON embedding data that can
+be used to rebuild OpenSearch indexes.
+
+For an existing environment that previously used the pgvector image:
+
+1. Apply the updated ConfigMap and PostgreSQL deployment.
+2. Roll out PostgreSQL on the standard `postgres:16` image.
+3. Run `python manage.py migrate`; migration `0011` drops the old HNSW index and
+   `embedding_vector` column if they exist.
+4. Run `python manage.py reindex_opensearch --create-indexes` when OpenSearch
+   needs to be rebuilt from PostgreSQL metadata and retained JSON embeddings.
+
+The old PostgreSQL `vector` extension may remain installed in existing
+databases, but the application no longer imports pgvector or depends on that
+extension for startup, migrations, indexing, or search.
 
 Minimum AWS IAM permissions for Bedrock use:
 
@@ -245,7 +265,7 @@ Planned future improvements include:
 - Ingress controller with TLS termination.
 - Asynchronous OCR and AI processing.
 - External object storage.
-- PostgreSQL with pgvector.
+- OpenSearch-backed semantic and hybrid retrieval.
 - CI/CD pipeline integration.
 - Automated image builds.
 - Centralized logging and monitoring.

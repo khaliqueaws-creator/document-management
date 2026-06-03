@@ -68,7 +68,6 @@ class DocumentChunkAdmin(admin.ModelAdmin):
         "chunk_index",
         "chunk_text",
         "embedding",
-        "embedding_vector",
         "embedding_model",
         "created_at",
     )

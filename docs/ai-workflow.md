@@ -189,15 +189,18 @@ flowchart TB
     Chunk --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Store[DocumentChunk JSON embeddings]
     Query[User AI search query] --> QueryEmbedding[Query embedding]
-    QueryEmbedding --> Compare[Cosine similarity]
-    Store --> Compare
-    Compare --> Results[Ranked document results]
+    Store --> Index[OpenSearch chunk vector index]
+    QueryEmbedding --> Search[OpenSearch vector retrieval]
+    Index --> Search
+    Search --> Hydrate[Hydrate PostgreSQL Documents]
+    Hydrate --> Results[Ranked document results]
 ```
 
 Document chunks are stored in the database with their source text, embedding
-model, and JSON embedding vector. AI Search embeds the user's query, compares it
-with stored chunk embeddings, keeps the best matching chunk per document, and
-returns ranked document results.
+model, and JSON embedding vector. OpenSearch stores the derived searchable
+chunk records. AI Search embeds the user's query, retrieves matching chunks from
+OpenSearch, hydrates final document records from PostgreSQL, and returns ranked
+document results through the Django UI.
 
 ## Current AI Design Decisions
 
@@ -216,7 +219,7 @@ Planned future enhancements include:
 
 - Background AI processing queues.
 - Semantic search refinements.
-- Vector database storage such as PostgreSQL with pgvector.
+- OpenSearch-backed semantic and hybrid retrieval refinements.
 - RAG document question answering.
 - Metadata confidence scoring.
 - Duplicate document detection.
