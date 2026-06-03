@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
         - name: migrate
-          image: docker.io/khalique/document-app:1.2
+          image: docker.io/khalique/document-app:1.6-bulk
           command:
             - /bin/sh
             - -c
@@ -50,7 +50,7 @@ spec:
               mountPath: /app/media
       containers:
         - name: document-app
-          image: docker.io/khalique/document-app:1.2
+          image: docker.io/khalique/document-app:1.6-bulk
           command:
             - gunicorn
             - docmanager.wsgi:application
