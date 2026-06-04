@@ -21,17 +21,17 @@ flowchart TB
             DB[PostgreSQL 16 Container\nport 5432]
         end
 
-        subgraph Rollback_DB[Deployment: mysql scaled to 0]
-            MySQL[MySQL 8.0 Container\nport 3306]
-        end
-
         subgraph AI_Local[Deployment: ollama]
             Ollama[Ollama Container\nport 11434]
         end
 
+        subgraph Search[Deployment: opensearch]
+            OpenSearch[OpenSearch Container\nport 9200]
+        end
+
         Media[(Media PVC)]
         DBPVC[(PostgreSQL PVC)]
-        MySQLPVC[(MySQL PVC)]
+        SearchPVC[(OpenSearch PVC)]
         ModelPVC[(Ollama Model PVC)]
 
         Config --> Init
@@ -43,7 +43,8 @@ flowchart TB
         Web --> DB
         Web --> Media
         DB --> DBPVC
-        MySQL --> MySQLPVC
+        Web --> OpenSearch
+        OpenSearch --> SearchPVC
         Ollama --> ModelPVC
         Web --> Ollama
     end
@@ -51,10 +52,13 @@ flowchart TB
     subgraph AI_External[External AI Providers]
         Gemini[Google Gemini API]
         Bedrock[AWS Bedrock Nova Lite]
+        Titan[AWS Bedrock Titan Embeddings V2]
     end
 
     Web --> Gemini
     Web --> Bedrock
+    Web --> Titan
+    Titan --> OpenSearch
 ```
 
 ## Deployment Components
@@ -66,14 +70,14 @@ flowchart TB
 | Init Container | Waits for the configured database and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
 | PostgreSQL | Active persistent relational database service. |
-| mysql | Optional rollback database backend retained with its PVC. |
+| OpenSearch | Derived document/chunk retrieval index for keyword and vector search. |
 | ollama | Optional local AI inference service. |
 | Gemini API | Optional external AI metadata provider. |
 | AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
 | AWS Bedrock Titan Embeddings V2 | Optional embedding provider for semantic AI search. |
 | Media PVC | Persistent storage for uploaded files. |
 | PostgreSQL PVC | Active persistent database storage. |
-| MySQL PVC | Retained rollback database storage. |
+| OpenSearch PVC | Persistent OpenSearch index storage. |
 | Ollama Model PVC | Persistent AI model storage. |
 
 ## Deployment Flow
@@ -94,6 +98,9 @@ sequenceDiagram
 
     Admin->>OpenShift: Apply postgresql deployment
     OpenShift->>PostgreSQL: Start PostgreSQL pod
+
+    Admin->>OpenShift: Apply opensearch deployment
+    OpenShift->>OpenShift: Start OpenSearch pod
 
     Admin->>OpenShift: Apply document-app deployment
     OpenShift->>Django: Start init container
@@ -180,10 +187,11 @@ oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 Successful output should show documents processed with chunks created. Errors
 are printed per document and do not stop the entire batch.
 
-## Database Backend Selection
+## Database Backend
 
-The container can run against either PostgreSQL or MySQL. The active backend is
-selected with `DB_ENGINE`. PostgreSQL is the current active OpenShift backend:
+The current application image supports PostgreSQL only. `DB_ENGINE` should be
+set to `postgresql`, and the OpenShift deployment uses the standard
+`postgres:16` image:
 
 ```text
 DB_ENGINE=postgresql
@@ -194,30 +202,8 @@ DB_HOST=postgresql
 DB_PORT=5432
 ```
 
-MySQL remains available as a rollback backend:
-
-```text
-DB_ENGINE=mysql
-DB_NAME=document_management
-DB_USER=docuser
-DB_PASSWORD=<database-password>
-DB_HOST=mysql
-DB_PORT=3306
-```
-
 For OpenShift, keep non-secret values in the ConfigMap and credentials in the
-Secret. Example live switch back to MySQL:
-
-```powershell
-oc set env deployment/document-app `
-  DB_ENGINE=mysql `
-  DB_HOST=mysql `
-  DB_PORT=3306 `
-  DB_NAME=document_management `
-  DB_USER=docuser
-```
-
-Set the password through the existing secret key used by Django:
+Secret. Set the password through the existing secret key used by Django:
 
 ```text
 DB_PASSWORD
@@ -232,17 +218,17 @@ oc exec deployment/document-app -- python manage.py migrate
 oc exec deployment/document-app -- python manage.py check
 ```
 
-The Django models are unchanged. The same migrations are used for PostgreSQL
-and MySQL.
+Other database engines are not part of the supported runtime architecture.
 
 ## Persistent Storage Design
 
 ```mermaid
 flowchart LR
     PostgreSQL[(PostgreSQL Pod)] --> DBPVC[(postgresql-pvc)]
-    MySQL[(MySQL Pod, scaled to 0)] -. rollback .-> MySQLPVC[(mysql-pvc)]
+    OpenSearch[(OpenSearch Pod)] --> SearchPVC[(opensearch-pvc)]
     Django[Django Pod] --> MediaPVC[(docmanager-media-pvc)]
     Ollama[Ollama Pod] --> ModelPVC[(ollama-models-pvc)]
+    Django --> OpenSearch
     Django --> Gemini[Google Gemini API]
     Django --> Bedrock[AWS Bedrock Nova Lite]
 ```
@@ -265,7 +251,8 @@ Planned future improvements include:
 - Ingress controller with TLS termination.
 - Asynchronous OCR and AI processing.
 - External object storage.
-- OpenSearch-backed semantic and hybrid retrieval.
+- Background bulk import and indexing workflows.
+- Hybrid keyword/vector retrieval refinements on OpenSearch.
 - CI/CD pipeline integration.
 - Automated image builds.
 - Centralized logging and monitoring.

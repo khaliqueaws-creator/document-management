@@ -31,6 +31,9 @@ flowchart TB
     AIChoice --> Bedrock[AWS Bedrock Nova Lite]
     OllamaSvc --> Ollama[Ollama Pod]
     Ollama --> OllamaPVC[(ollama-models-pvc)]
+
+    App --> Titan[AWS Bedrock Titan Embeddings]
+    Titan --> OpenSearchSvc
 ```
 
 ## Component Responsibilities
@@ -50,6 +53,7 @@ flowchart TB
 | Tesseract OCR | Extracts text from image files and scanned documents. |
 | Gemini API | External AI metadata provider for higher-quality suggestions. |
 | AWS Bedrock Nova Lite | External AI metadata provider accessed through boto3 and AWS credentials. |
+| AWS Bedrock Titan Embeddings V2 | External embedding provider for document chunks and AI Search queries. |
 | Ollama Service / Pod | Local AI metadata provider for private/offline model execution. |
 | ollama-models-pvc | Persists downloaded Ollama models. |
 | Okta OIDC | Handles authentication and provides group claims for application roles. |
@@ -95,6 +99,10 @@ flowchart TB
     AIProviderConfig --> Ollama[Ollama]
     AIProviderConfig --> Gemini[Gemini]
     AIProviderConfig --> Bedrock[AWS Bedrock Nova Lite]
+
+    App --> Titan[AWS Bedrock Titan Embeddings V2]
+    Titan --> Chunks
+    Titan --> SearchChunks
 ```
 
 ## Design Notes

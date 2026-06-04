@@ -6,7 +6,8 @@ This runbook reflects the current implementation:
 
 - Django runs as `deployment/document-app` with Gunicorn.
 - PostgreSQL runs as `deployment/postgresql` and is the active database backend.
-- MySQL can remain scaled to 0 as a rollback option with `mysql-pvc` retained.
+- OpenSearch runs as `deployment/opensearch` and owns derived keyword/vector retrieval indexes.
+- The app image referenced by the manifests is `docker.io/khalique/document-app:1.6-bulk`.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
 - Gemini can be used by setting `AI_METADATA_PROVIDER=gemini`.
 - AWS Bedrock Nova Lite can be used by setting `AI_METADATA_PROVIDER=bedrock`.
@@ -25,7 +26,7 @@ This runbook reflects the current implementation:
 | [A. Rebuild From Scratch](#a-rebuild-from-scratch) | CRC was recreated, the project was removed, or you want a clean local deployment. |
 | [B. Normal Code Or Config Redeploy](#b-normal-code-or-config-redeploy) | You changed Django code, templates, migrations, ConfigMap values, or Ollama model settings. |
 | [C. Stop CRC And Start CRC Then Check App](#c-stop-crc-and-start-crc-then-check-app) | You are shutting down or restarting your existing local CRC environment. |
-| [D. PostgreSQL Active With MySQL Rollback](#d-postgresql-active-with-mysql-rollback) | You want to verify PostgreSQL or roll back to MySQL. |
+| [D. PostgreSQL And OpenSearch Checks](#d-postgresql-and-opensearch-checks) | You want to verify database and search dependencies. |
 | [E. Some Troubleshooting Tips](#e-some-troubleshooting-tips) | Pods, routes, migrations, probes, Ollama, or login checks are failing. |
 | [F. Issue Log](#f-issue-log) | Known CRC/OpenShift issues and the exact recovery steps used. |
 
@@ -55,11 +56,9 @@ Generate local secret values:
 ```powershell
 $SecretKey = python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 $DbPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
-$RootDbPassword = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object {[char]$_})
 
 $SecretKey
 $DbPassword
-$RootDbPassword
 ```
 
 Then update:
@@ -78,29 +77,27 @@ Current public URL values:
 | `OKTA_LOGOUT_REDIRECT_URL` | `https://docsdemo.khalique.net/` |
 | `ALLOWED_HOSTS` | Must include `docsdemo.khalique.net` and `document-app-document-app.apps-crc.testing` |
 
-### 3. Build The App Image
+### 3. Build Or Pull The App Image
 
-Create the binary Docker build if it does not exist:
+The checked-in manifests reference the Docker Hub image:
 
-```powershell
-oc new-build --name=document-app --binary --strategy=docker
+```text
+docker.io/khalique/document-app:1.6-bulk
 ```
 
-Build from the repository root:
+If you are iterating locally, build and push a new tag before applying the
+deployment:
 
 ```powershell
-oc start-build document-app --from-dir=. --follow
+docker build --no-cache --pull -t docker.io/khalique/document-app:<tag> .
+docker push docker.io/khalique/document-app:<tag>
 ```
 
-Verify:
+Then update both the init container and app container image references in
+`openshift/docmanager-deployment.yaml`.
 
-```powershell
-oc get imagestream document-app
-oc get istag document-app:latest
-```
-
-> [!NOTE]
-> If the project name is not `docmanager`, update the image path in `openshift/docmanager-deployment.yaml` and `openshift/docmanager-migrate-job.yaml`.
+The current known-good image for the OpenSearch bulk-import path is
+`docker.io/khalique/document-app:1.6-bulk`.
 
 ### 4. Apply Resources
 
@@ -127,7 +124,7 @@ oc rollout status deployment/document-app
 The `document-app` deployment runs migrations automatically in an init container before Gunicorn starts.
 
 > [!NOTE]
-> The Django image must already exist before `deployment/document-app` can start. If the deployment shows `ImagePullBackOff` or `InvalidImageName`, rebuild the image with `oc start-build document-app --from-dir=. --follow`.
+> The Django image must exist in Docker Hub before `deployment/document-app` can start. If the deployment shows `ImagePullBackOff`, confirm the referenced tag was pushed and is pullable.
 
 ### 5. Apply Ollama Resources
 
@@ -498,10 +495,10 @@ Watch logs while testing:
 oc logs deployment/document-app -f
 ```
 
-## D. PostgreSQL Active With MySQL Rollback
+## D. PostgreSQL And OpenSearch Checks
 
-PostgreSQL is the active database backend. MySQL support and `mysql-pvc` are
-retained as a rollback option.
+PostgreSQL is the only supported application database backend. OpenSearch is
+the derived retrieval tier for keyword and vector search.
 
 Verify PostgreSQL:
 
@@ -529,24 +526,21 @@ postgresql
 5432
 ```
 
-Keep MySQL scaled down but do not delete `mysql-pvc`:
+Verify OpenSearch:
 
 ```powershell
-oc scale deployment/mysql --replicas=0
-oc get deployment mysql
-oc get pvc mysql-pvc
+oc apply -f openshift/opensearch-pvc.yaml
+oc apply -f openshift/opensearch-deployment.yaml
+oc rollout status deployment/opensearch
+oc get pods -l app=opensearch
+oc get svc opensearch
+oc exec deployment/document-app -- python -c "from documents.opensearch_indexing import get_opensearch_client; print(get_opensearch_client().info())"
 ```
 
-Rollback to MySQL if needed:
+Rebuild OpenSearch indexes from PostgreSQL:
 
 ```powershell
-oc scale deployment/mysql --replicas=1
-oc rollout status deployment/mysql
-oc set env deployment/document-app `
-  DB_ENGINE=mysql `
-  DB_HOST=mysql `
-  DB_PORT=3306
-oc rollout status deployment/document-app
+oc exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
 ```
 
 ## E. Some Troubleshooting Tips
@@ -574,7 +568,7 @@ oc get secret docmanager-secrets
 | Symptom | Check |
 | --- | --- |
 | Pod shows `InvalidImageName` | Look for an unreplaced project placeholder in the deployment or migration job image path. |
-| MySQL is not reachable | Confirm `oc get svc mysql`, `oc get pods`, and `DB_HOST: "mysql"` in the secret. |
+| OpenSearch connection refused | Confirm `deployment/opensearch` is running, then run `reindex_opensearch --create-indexes`. |
 | Probe returns `HTTP 400` | Make sure the probe `Host` header is listed in `ALLOWED_HOSTS`. |
 | Login works but `/` returns `500` | Check app logs and confirm migrations ran successfully. |
 | Migration files changed | Rebuild the app image before restarting the deployment. |
@@ -583,7 +577,7 @@ oc get secret docmanager-secrets
 | Gemini says API key is not configured | Add `GEMINI_API_KEY` to `docmanager-secrets`, then restart `deployment/document-app`. |
 | Gemini returns HTTP 403 or 400 | Confirm the API key is valid and `GEMINI_MODEL` is available in your Gemini models list. |
 | PowerShell fails on `oc patch ... -p '{"data":...}'` | Use a temporary JSON patch file with `--patch-file`. |
-| Applying the secret template breaks MySQL login | Restore DB secrets or reset MySQL; prefer `oc set env secret/docmanager-secrets GEMINI_API_KEY=...` for Gemini updates. |
+| Applying the secret template changes provider credentials | Restore the affected secret values; prefer `oc set env secret/docmanager-secrets GEMINI_API_KEY=...` for Gemini updates. |
 | Django still uses the old Ollama model | Restart `deployment/document-app` after applying the ConfigMap. |
 | Ollama pull job says `couldn't find key OLLAMA_MODEL in ConfigMap` | Reapply `openshift/docmanager-configmap.yaml`, then delete and recreate `job/ollama-pull-model`. |
 | Ollama pod says `Insufficient memory` or `model requires more system memory` | Use the smaller default `qwen2.5:0.5b`, reapply the config map and Ollama deployment, then recreate `job/ollama-pull-model`. |
@@ -629,8 +623,9 @@ oc logs job/docmanager-migrate
 
 | Do Not Delete | Unless You Intend To Reset |
 | --- | --- |
-| `mysql-pvc` | Stored local database data |
+| `postgresql-pvc` | Canonical document database data |
 | `docmanager-media-pvc` | Uploaded media files |
+| `opensearch-pvc` | Derived search/vector indexes |
 | `ollama-models-pvc` | Downloaded Ollama models |
 
 ## F. Issue Log

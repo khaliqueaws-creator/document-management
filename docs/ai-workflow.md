@@ -14,7 +14,8 @@ sequenceDiagram
     participant OCR as Text Extraction / OCR
     participant AI as AI Provider
     participant Embeddings as Bedrock Titan Embeddings
-    participant DB as MySQL
+    participant DB as PostgreSQL
+    participant Search as OpenSearch
 
     Loader->>Django: Upload document + metadata
     Django->>Media: Save uploaded file
@@ -22,6 +23,7 @@ sequenceDiagram
     OCR-->>Django: Extracted text
     Django->>Embeddings: Generate chunk embeddings when text is valid
     Embeddings-->>Django: Embedding vectors
+    Django->>Search: Index document/chunk search records
     Django->>AI: Send text for metadata suggestion
     AI-->>Django: Suggested type, department, tags, summary
     Django->>DB: Save metadata, extracted text, chunks, AI suggestion, audit event

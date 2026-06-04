@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL or PostgreSQL, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
+A Django-based intelligent document management application deployed on OpenShift CRC with PostgreSQL, OpenSearch, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
 
 The public demo path used during development is:
 
@@ -27,7 +27,7 @@ flowchart LR
     OpenShift --> Django[Django + Gunicorn]
 
     Django --> PostgreSQL[(PostgreSQL)]
-    Django -. rollback .-> MySQL[(MySQL)]
+    Django --> OpenSearch[(OpenSearch)]
     Django --> Storage[(Media PVC)]
 
     Django --> OCR[Tesseract OCR]
@@ -38,7 +38,8 @@ flowchart LR
     AI --> Bedrock[AWS Bedrock Nova Lite]
 
     Django --> Embeddings[AWS Bedrock Titan Embeddings]
-    Embeddings --> Chunks[(DocumentChunk embeddings)]
+    Embeddings --> Chunks[(PostgreSQL DocumentChunk JSON embeddings)]
+    Chunks --> OpenSearch
 ```
 
 ## Project Purpose
@@ -81,7 +82,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Frontend | Django templates, server-rendered HTML/CSS |
 | Backend | Python, Django |
 | App server | Gunicorn |
-| Database | PostgreSQL active, MySQL retained as optional fallback |
+| Database | PostgreSQL |
 | File storage | OpenShift PersistentVolumeClaim |
 | OCR | Tesseract, pdf2image, Pillow |
 | Document parsing | pypdf, python-docx, openpyxl |
@@ -89,9 +90,10 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Authorization | Okta groups stored in Django session |
 | AI metadata | Switchable Ollama, Gemini, or AWS Bedrock provider |
 | AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
-| Semantic search | JSON embeddings with cosine similarity |
+| Search index | OpenSearch document and chunk indexes |
+| Semantic search | AWS Bedrock query embeddings with OpenSearch k-NN retrieval |
 | Container platform | OpenShift CRC |
-| Container image | Docker build through OpenShift binary build |
+| Container image | Docker Hub image `docker.io/khalique/document-app:1.6-bulk` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -106,14 +108,16 @@ Browser
 
 Django
   -> document media PVC
+  -> OpenSearch Service and OpenSearch PVC
   -> Ollama Service and Ollama model PVC
   -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
   -> AWS Bedrock Titan Embeddings over HTTPS
   -> DocumentChunk rows in PostgreSQL
+  -> OpenSearch document and chunk indexes
 ```
 
-The Django application and database run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval runs through OpenSearch; PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, and JSON embedding data used for reindexing. The application image no longer includes MySQL runtime support. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval runs through OpenSearch; PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. Ollama remains available as a local/private metadata provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
 ## Database Backend
 
@@ -221,6 +225,12 @@ Rebuild embeddings for existing documents:
 oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 ```
 
+Rebuild OpenSearch indexes from PostgreSQL:
+
+```powershell
+oc exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
+```
+
 Open the AI Search page:
 
 ```text
@@ -254,19 +264,13 @@ Copy them into the running OpenShift pod:
 
 ```powershell
 oc get pods -l app=document-app
-oc cp test_documents <document-app-pod>:/tmp/test_documents
+oc rsync .\test_documents\pdf\ <document-app-pod>:/tmp/bulk-docs
 ```
 
-Import a batch:
+Import a batch and prepare AI Search:
 
 ```powershell
-oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/test_documents --limit 20
-```
-
-Then create embeddings:
-
-```powershell
-oc exec deployment/document-app -- python manage.py rebuild_embeddings
+oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 20 --rebuild-embeddings --reindex-opensearch --create-indexes
 ```
 
 Run lightweight tests inside OpenShift:
