@@ -804,6 +804,92 @@ class ValidateBedrockOpenSearchCommandTests(SimpleTestCase):
             call_command("validate_bedrock_opensearch", stdout=StringIO())
 
 
+class HealthAiSearchCommandTests(SimpleTestCase):
+    @override_settings(
+        AWS_REGION="us-east-1",
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        AI_EMBEDDING_DIMENSIONS=1024,
+        OPENSEARCH_URL="http://opensearch:9200",
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch.dict(
+        "os.environ",
+        {
+            "AWS_ACCESS_KEY_ID": "test-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret",
+        },
+    )
+    @patch("documents.management.commands.health_ai_search.get_titan_embedding")
+    @patch("documents.management.commands.health_ai_search.get_opensearch_client")
+    @patch("documents.management.commands.health_ai_search.DocumentChunk")
+    @patch("documents.management.commands.health_ai_search.Document")
+    def test_health_ai_search_reports_ok_status(
+        self,
+        mock_document,
+        mock_document_chunk,
+        mock_get_client,
+        mock_embedding,
+    ):
+        mock_document.objects.count.return_value = 3
+        embedded_chunks = MagicMock()
+        embedded_chunks.count.return_value = 5
+        embedded_chunks.iterator.return_value = iter([
+            Mock(embedding=[0.2] * 1024),
+            Mock(embedding=[0.3] * 1024),
+        ])
+        mock_document_chunk.objects.count.return_value = 5
+        mock_document_chunk.objects.exclude.return_value.filter.return_value = (
+            embedded_chunks
+        )
+
+        client = Mock()
+        client.info.return_value = {"version": {"number": "3.3.0"}}
+        client.indices.exists.side_effect = [True, True]
+        client.count.side_effect = [{"count": 3}, {"count": 5}]
+        mock_get_client.return_value = client
+        mock_embedding.return_value = [0.1] * 1024
+        stdout = StringIO()
+
+        call_command("health_ai_search", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("settings=ok", output)
+        self.assertIn("postgres=ok documents=3 chunks=5", output)
+        self.assertIn("embeddings=ok chunks_with_embeddings=5", output)
+        self.assertIn("opensearch=ok version=3.3.0", output)
+        self.assertIn("bedrock=ok embedding_dimensions=1024", output)
+        self.assertIn("summary=done errors=0 warnings=0", output)
+
+    @patch("documents.management.commands.health_ai_search.get_opensearch_client")
+    @patch("documents.management.commands.health_ai_search.DocumentChunk")
+    @patch("documents.management.commands.health_ai_search.Document")
+    def test_health_ai_search_reports_opensearch_failures(
+        self,
+        mock_document,
+        mock_document_chunk,
+        mock_get_client,
+    ):
+        mock_document.objects.count.return_value = 1
+        embedded_chunks = MagicMock()
+        embedded_chunks.count.return_value = 0
+        embedded_chunks.iterator.return_value = iter([])
+        mock_document_chunk.objects.count.return_value = 0
+        mock_document_chunk.objects.exclude.return_value.filter.return_value = (
+            embedded_chunks
+        )
+        mock_get_client.side_effect = RuntimeError("connection refused")
+        stdout = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command("health_ai_search", "--skip-bedrock", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("opensearch=error connection_failed=connection refused", output)
+        self.assertIn("bedrock=warn skipped live embedding check", output)
+        self.assertIn("summary=done errors=1", output)
+
+
 class SemanticSearchTests(SimpleTestCase):
     def test_cosine_similarity_scores_matching_vectors(self):
         self.assertEqual(cosine_similarity([1, 0], [1, 0]), 1.0)

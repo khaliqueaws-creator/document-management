@@ -543,6 +543,13 @@ Rebuild OpenSearch indexes from PostgreSQL:
 oc exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
 ```
 
+Run the combined AI Search health report:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_ai_search
+oc exec deployment/document-app -- python manage.py health_ai_search --skip-bedrock
+```
+
 ## E. Some Troubleshooting Tips
 
 ### Quick Checks
@@ -569,6 +576,7 @@ oc get secret docmanager-secrets
 | --- | --- |
 | Pod shows `InvalidImageName` | Look for an unreplaced project placeholder in the deployment or migration job image path. |
 | OpenSearch connection refused | Confirm `deployment/opensearch` is running, then run `reindex_opensearch --create-indexes`. |
+| AI Search has no embeddings or unclear provider/index state | Run `python manage.py health_ai_search` from `deployment/document-app`. |
 | Probe returns `HTTP 400` | Make sure the probe `Host` header is listed in `ALLOWED_HOSTS`. |
 | Login works but `/` returns `500` | Check app logs and confirm migrations ran successfully. |
 | Migration files changed | Rebuild the app image before restarting the deployment. |

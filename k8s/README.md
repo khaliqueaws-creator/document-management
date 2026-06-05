@@ -84,8 +84,12 @@ Build embeddings and indexes for AI Search:
 ```powershell
 kubectl exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 kubectl exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
+kubectl exec deployment/document-app -- python manage.py health_ai_search
 kubectl exec deployment/document-app -- python manage.py validate_bedrock_opensearch
 ```
+
+Use `health_ai_search --skip-bedrock` for PostgreSQL and OpenSearch checks
+without making a live AWS Bedrock embedding call.
 
 ## Bulk Test Import
 

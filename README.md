@@ -231,6 +231,15 @@ Rebuild OpenSearch indexes from PostgreSQL:
 oc exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
 ```
 
+Check AI Search dependency health:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_ai_search
+```
+
+Use `--skip-bedrock` when you only want PostgreSQL and OpenSearch diagnostics
+without making a live AWS Bedrock embedding call.
+
 Open the AI Search page:
 
 ```text
