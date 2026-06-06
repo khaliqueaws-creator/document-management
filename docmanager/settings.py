@@ -197,6 +197,13 @@ BEDROCK_TIMEOUT_SECONDS = int(os.environ.get("BEDROCK_TIMEOUT_SECONDS", "90"))
 AI_EMBEDDING_MAX_CHARS = int(os.environ.get("AI_EMBEDDING_MAX_CHARS", "2500"))
 AI_EMBEDDING_DIMENSIONS = int(os.environ.get("AI_EMBEDDING_DIMENSIONS", "1024"))
 AI_SEARCH_TOP_K = int(os.environ.get("AI_SEARCH_TOP_K", "5"))
+AI_RAG_TOP_K = int(os.environ.get("AI_RAG_TOP_K", "5"))
+AI_RAG_MAX_CONTEXT_CHARS = int(
+    os.environ.get("AI_RAG_MAX_CONTEXT_CHARS", "1800")
+)
+AI_RAG_MAX_ANSWER_TOKENS = int(
+    os.environ.get("AI_RAG_MAX_ANSWER_TOKENS", "700")
+)
 OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL", "http://opensearch:9200")
 OPENSEARCH_INDEX_PREFIX = os.environ.get(
     "OPENSEARCH_INDEX_PREFIX",

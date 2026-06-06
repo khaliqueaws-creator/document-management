@@ -32,6 +32,13 @@ from .opensearch_indexing import (
     get_document_mapping,
     index_document,
 )
+from .rag import (
+    RAGError,
+    answer_question,
+    build_rag_prompt,
+    generate_rag_answer,
+    retrieve_question_context,
+)
 from .semantic_search import cosine_similarity, search_documents_by_meaning
 from .views import try_rebuild_document_embeddings, try_reindex_document
 from .views import accept_ai_metadata, reject_ai_metadata
@@ -1016,3 +1023,120 @@ class SemanticSearchTests(SimpleTestCase):
 
         with self.assertRaises(EmbeddingError):
             search_documents_by_meaning("employee onboarding")
+
+
+class RAGTests(SimpleTestCase):
+    @override_settings(
+        AI_RAG_TOP_K=2,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.rag.Document.objects.in_bulk")
+    @patch("documents.rag.get_opensearch_client")
+    @patch("documents.rag.get_titan_embedding")
+    def test_retrieve_question_context_uses_opensearch_and_hydrates_citations(
+        self,
+        mock_embedding,
+        mock_get_client,
+        mock_in_bulk,
+    ):
+        mock_embedding.return_value = [1, 0]
+        document = Mock()
+        document.file.name = "documents/policy.pdf"
+        document.department = "HR"
+        document.document_type = "Policy"
+        mock_in_bulk.return_value = {7: document}
+        client = Mock()
+        client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {
+                        "_score": 1.9,
+                        "_source": {
+                            "document_id": 7,
+                            "chunk_id": 70,
+                            "chunk_index": 0,
+                            "chunk_text": "Benefits enrollment closes Friday.",
+                        },
+                    },
+                    {
+                        "_score": 1.1,
+                        "_source": {
+                            "document_id": 99,
+                            "chunk_text": "Missing document",
+                        },
+                    },
+                ]
+            }
+        }
+        mock_get_client.return_value = client
+
+        contexts = retrieve_question_context("when does enrollment close?")
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0]["citation_id"], 1)
+        self.assertEqual(contexts[0]["document"], document)
+        self.assertEqual(contexts[0]["chunk_id"], 70)
+        self.assertEqual(contexts[0]["chunk_text"], "Benefits enrollment closes Friday.")
+        search_body = client.search.call_args.kwargs["body"]
+        self.assertEqual(search_body["query"]["knn"]["embedding"]["vector"], [1, 0])
+
+    @override_settings(AI_RAG_MAX_CONTEXT_CHARS=50)
+    def test_build_rag_prompt_includes_question_context_and_citation_rules(self):
+        document = Mock()
+        document.file.name = "documents/policy.pdf"
+        document.department = "HR"
+        document.document_type = "Policy"
+        prompt = build_rag_prompt(
+            "What is the deadline?",
+            [
+                {
+                    "citation_id": 1,
+                    "document": document,
+                    "chunk_text": "Enrollment closes Friday for all employees.",
+                }
+            ],
+        )
+
+        self.assertIn("What is the deadline?", prompt)
+        self.assertIn("[1]", prompt)
+        self.assertIn("documents/policy.pdf", prompt)
+        self.assertIn("using only the provided document excerpts", prompt)
+
+    @patch("documents.rag.generate_answer_with_bedrock")
+    def test_generate_rag_answer_uses_bedrock(self, mock_bedrock):
+        mock_bedrock.return_value = "Answer [1]"
+
+        self.assertEqual(generate_rag_answer("prompt"), "Answer [1]")
+        mock_bedrock.assert_called_once_with("prompt")
+
+    @patch("documents.rag.generate_rag_answer")
+    @patch("documents.rag.retrieve_question_context")
+    def test_answer_question_returns_grounded_answer_and_citations(
+        self,
+        mock_context,
+        mock_generate,
+    ):
+        citation = {
+            "citation_id": 1,
+            "document": Mock(),
+            "chunk_text": "Policy excerpt",
+        }
+        mock_context.return_value = [citation]
+        mock_generate.return_value = "Use the policy [1]."
+
+        result = answer_question("What policy applies?")
+
+        self.assertFalse(result["empty"])
+        self.assertEqual(result["answer"], "Use the policy [1].")
+        self.assertEqual(result["citations"], [citation])
+
+    @patch("documents.rag.retrieve_question_context")
+    def test_answer_question_handles_empty_retrieval(self, mock_context):
+        mock_context.return_value = []
+
+        result = answer_question("Unknown topic")
+
+        self.assertTrue(result["empty"])
+        self.assertEqual(result["citations"], [])
+        self.assertIn("do not contain enough", result["answer"])

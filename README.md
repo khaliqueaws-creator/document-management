@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with PostgreSQL, OpenSearch, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
+A Django-based intelligent document management application deployed on OpenShift CRC with PostgreSQL, OpenSearch, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, semantic AI search, and RAG document Q&A.
 
 The public demo path used during development is:
 
@@ -46,7 +46,7 @@ flowchart LR
 
 This project is a learning and architecture build for an enterprise-style document management and intelligent document processing platform. The goal is to grow a simple upload/search application into a practical ECM/IDP-style system using open-source components and production-like deployment patterns.
 
-The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, AI-assisted metadata suggestions, document embeddings, and semantic AI search.
+The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, AI-assisted metadata suggestions, document embeddings, semantic AI search, and grounded document question answering.
 
 ## Current Feature Set
 
@@ -72,6 +72,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
 - Rebuild embeddings in batch with a Django management command.
 - Search documents by meaning through the AI Search page.
+- Ask document questions with retrieved chunk citations through the Ask Documents page.
 - Bulk import local test documents through a Django management command.
 - Use synthetic Word, Excel, PDF, and OCR image samples from `test_documents/`.
 
@@ -92,8 +93,9 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
 | Search index | OpenSearch document and chunk indexes |
 | Semantic search | AWS Bedrock query embeddings with OpenSearch k-NN retrieval |
+| RAG Q&A | OpenSearch chunk retrieval with AWS Bedrock Nova Lite answer generation |
 | Container platform | OpenShift CRC |
-| Container image | Docker Hub image `docker.io/khalique/document-app:1.6-bulk` |
+| Container image | Docker Hub image `docker.io/khalique/document-app:1.7-rag` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -246,6 +248,16 @@ Open the AI Search page:
 /ai-search/
 ```
 
+Open the RAG document Q&A page:
+
+```text
+/ask/
+```
+
+For a learning-focused walkthrough of the RAG call flow, model roles, prompt
+construction, and citation handling, see
+[`docs/rag-question-answering.md`](docs/rag-question-answering.md).
+
 Example semantic queries:
 
 ```text
@@ -254,6 +266,14 @@ vendor invoice
 security access request
 privacy impact
 expense reimbursement
+```
+
+Example document questions:
+
+```text
+What are the onboarding requirements?
+Which documents mention vendor invoices?
+What privacy risks are described?
 ```
 
 ## Bulk Test Document Import
@@ -265,9 +285,11 @@ test_documents/word/
 test_documents/excel/
 test_documents/pdf/
 test_documents/ocr_images/
+test_documents/rag_health_policy/
 ```
 
-These files are generated for upload, OCR, metadata, embedding, and AI Search testing.
+These files are generated for upload, OCR, metadata, embedding, AI Search, and
+RAG document Q&A testing.
 
 Copy them into the running OpenShift pod:
 
@@ -280,6 +302,13 @@ Import a batch and prepare AI Search:
 
 ```powershell
 oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 20 --rebuild-embeddings --reindex-opensearch --create-indexes
+```
+
+Import the focused RAG test bundle:
+
+```powershell
+oc rsync .\test_documents\rag_health_policy\ <document-app-pod>:/tmp/rag-health-policy
+oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/rag-health-policy --rebuild-embeddings --reindex-opensearch --create-indexes
 ```
 
 Run lightweight tests inside OpenShift:

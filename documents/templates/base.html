@@ -612,6 +612,11 @@
                 AI Search
             </a>
 
+            <a href="{% url 'ask_documents' %}"
+               class="{% if request.path == '/ask/' %}active{% endif %}">
+                Ask Documents
+            </a>
+
 			{% if "DjangoLoader" in request.session.user.groups or "DjangoAdmin" in request.session.user.groups %}
 			<a href="{% url 'upload' %}"
                class="{% if request.path == '/upload/' %}active{% endif %}">

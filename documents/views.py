@@ -24,6 +24,7 @@ from .opensearch_indexing import (
     delete_document as delete_indexed_document,
     reindex_document,
 )
+from .rag import RAGError, answer_question
 from .semantic_search import search_documents_by_meaning
 from .auth import oauth
 from .permissions import (
@@ -626,6 +627,33 @@ def ai_search(request):
     return render(request, "ai_search.html", {
         "query": query,
         "results": results,
+        "has_embeddings": has_embeddings,
+    })
+
+
+@okta_role_required(is_viewer)
+def ask_documents(request):
+    question = (request.GET.get("q") or "").strip()
+    rag_result = None
+    has_embeddings = (
+        DocumentChunk.objects
+        .exclude(embedding=[])
+        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .exists()
+    )
+
+    if question and has_embeddings:
+        try:
+            rag_result = answer_question(question)
+        except (EmbeddingError, RAGError) as error:
+            messages.warning(
+                request,
+                f"Document Q&A could not be completed: {error}"
+            )
+
+    return render(request, "ask_documents.html", {
+        "question": question,
+        "rag_result": rag_result,
         "has_embeddings": has_embeddings,
     })
 

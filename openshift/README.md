@@ -7,7 +7,7 @@ This runbook reflects the current implementation:
 - Django runs as `deployment/document-app` with Gunicorn.
 - PostgreSQL runs as `deployment/postgresql` and is the active database backend.
 - OpenSearch runs as `deployment/opensearch` and owns derived keyword/vector retrieval indexes.
-- The app image referenced by the manifests is `docker.io/khalique/document-app:1.6-bulk`.
+- The app image referenced by the manifests is `docker.io/khalique/document-app:1.7-rag`.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
 - Gemini can be used by setting `AI_METADATA_PROVIDER=gemini`.
 - AWS Bedrock Nova Lite can be used by setting `AI_METADATA_PROVIDER=bedrock`.
@@ -82,7 +82,7 @@ Current public URL values:
 The checked-in manifests reference the Docker Hub image:
 
 ```text
-docker.io/khalique/document-app:1.6-bulk
+docker.io/khalique/document-app:1.7-rag
 ```
 
 If you are iterating locally, build and push a new tag before applying the
@@ -96,8 +96,8 @@ docker push docker.io/khalique/document-app:<tag>
 Then update both the init container and app container image references in
 `openshift/docmanager-deployment.yaml`.
 
-The current known-good image for the OpenSearch bulk-import path is
-`docker.io/khalique/document-app:1.6-bulk`.
+The current known-good image for the RAG document Q&A path is
+`docker.io/khalique/document-app:1.7-rag`.
 
 ### 4. Apply Resources
 
@@ -275,6 +275,9 @@ oc exec deployment/document-app -- printenv GEMINI_BASE_URL
 oc exec deployment/document-app -- printenv GEMINI_MODEL
 oc exec deployment/document-app -- printenv AI_METADATA_MAX_CHARS
 oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
+oc exec deployment/document-app -- printenv AI_RAG_TOP_K
+oc exec deployment/document-app -- printenv AI_RAG_MAX_CONTEXT_CHARS
+oc exec deployment/document-app -- printenv AI_RAG_MAX_ANSWER_TOKENS
 ```
 
 Expected important values:
@@ -282,11 +285,14 @@ Expected important values:
 ```text
 http://ollama:11434
 qwen2.5:0.5b
-gemini
+bedrock
 https://generativelanguage.googleapis.com
 gemini-2.5-flash
 2500
 True
+5
+1800
+700
 ```
 
 Then upload a document through the app. The current workflow is:
@@ -343,6 +349,9 @@ Examples that need this:
 - `GEMINI_MODEL`.
 - `AI_METADATA_MAX_CHARS`.
 - `AUTO_AI_METADATA_ON_UPLOAD`.
+- `AI_RAG_TOP_K`.
+- `AI_RAG_MAX_CONTEXT_CHARS`.
+- `AI_RAG_MAX_ANSWER_TOKENS`.
 
 ### Gemini Provider Setup
 

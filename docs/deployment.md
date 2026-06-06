@@ -128,6 +128,9 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 | BEDROCK_EMBED_MODEL_ID | amazon.titan-embed-text-v2:0 | Titan model used for embeddings. |
 | AI_EMBEDDING_MAX_CHARS | 2500 | Maximum text characters per embedding chunk. |
 | AI_SEARCH_TOP_K | 5 | Number of semantic search results to return. |
+| AI_RAG_TOP_K | 5 | Number of retrieved chunks to include as Q&A context. |
+| AI_RAG_MAX_CONTEXT_CHARS | 1800 | Maximum characters included from each retrieved chunk. |
+| AI_RAG_MAX_ANSWER_TOKENS | 700 | Maximum answer tokens requested from Bedrock Nova Lite. |
 
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,

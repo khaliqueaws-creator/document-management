@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
         - name: migrate
-          image: docker.io/khalique/document-app:1.6-bulk
+          image: docker.io/khalique/document-app:1.7-rag
           command:
             - python
             - manage.py

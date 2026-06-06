@@ -6,7 +6,7 @@ OpenShift deployment without OpenShift-only Route or SCC resources.
 
 ## Current Components
 
-- `document-app`: Django + Gunicorn app using `docker.io/khalique/document-app:1.6-bulk`.
+- `document-app`: Django + Gunicorn app using `docker.io/khalique/document-app:1.7-rag`.
 - `postgresql`: Standard `postgres:16` database for canonical document state.
 - `opensearch`: Derived keyword/vector retrieval index.
 - `opensearch-dashboards`: Optional operational UI for OpenSearch.
@@ -90,6 +90,20 @@ kubectl exec deployment/document-app -- python manage.py validate_bedrock_opense
 
 Use `health_ai_search --skip-bedrock` for PostgreSQL and OpenSearch checks
 without making a live AWS Bedrock embedding call.
+
+Validate RAG document Q&A by importing the focused health-policy bundle:
+
+```powershell
+$pod = kubectl get pod -l app=document-app -o jsonpath="{.items[0].metadata.name}"
+kubectl cp .\test_documents\rag_health_policy\ "${pod}:/tmp/rag-health-policy"
+kubectl exec deployment/document-app -- python manage.py bulk_import_documents /tmp/rag-health-policy --rebuild-embeddings --reindex-opensearch --create-indexes
+```
+
+Then open `/ask/` and ask:
+
+```text
+When does health coverage start?
+```
 
 ## Bulk Test Import
 

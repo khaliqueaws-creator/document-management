@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock.
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock.
 
 ## Current OpenShift CRC Architecture
 
@@ -34,6 +34,7 @@ flowchart TB
 
     App --> Titan[AWS Bedrock Titan Embeddings]
     Titan --> OpenSearchSvc
+    App --> RAGAnswer[AWS Bedrock Nova Lite RAG Answers]
 ```
 
 ## Component Responsibilities
@@ -44,15 +45,15 @@ flowchart TB
 | Cloudflare Tunnel | Provides public demo access to the OpenShift CRC route. |
 | OpenShift Route | Routes external HTTP traffic to the document-app service. |
 | document-app Service | Exposes the Django application pod inside OpenShift. |
-| Django + Gunicorn | Hosts the application logic, templates, search, upload, OCR orchestration, AI metadata flow, and role-based access. |
+| Django + Gunicorn | Hosts the application logic, templates, search, document Q&A, upload, OCR orchestration, AI metadata flow, and role-based access. |
 | PostgreSQL Service / Pod | Stores canonical document metadata, extracted text, sessions, audit events, AI suggestion status, and chunk rebuild/debug data. |
 | postgresql-pvc | Persists PostgreSQL database files. |
-| OpenSearch Service / Pod | Stores derived document and chunk search records for keyword/vector retrieval. |
+| OpenSearch Service / Pod | Stores derived document and chunk search records for keyword, vector, and RAG retrieval. |
 | opensearch-pvc | Persists OpenSearch index data. |
 | docmanager-media-pvc | Persists uploaded document files. |
 | Tesseract OCR | Extracts text from image files and scanned documents. |
 | Gemini API | External AI metadata provider for higher-quality suggestions. |
-| AWS Bedrock Nova Lite | External AI metadata provider accessed through boto3 and AWS credentials. |
+| AWS Bedrock Nova Lite | External AI metadata provider and RAG answer generator accessed through boto3 and AWS credentials. |
 | AWS Bedrock Titan Embeddings V2 | External embedding provider for document chunks and AI Search queries. |
 | Ollama Service / Pod | Local AI metadata provider for private/offline model execution. |
 | ollama-models-pvc | Persists downloaded Ollama models. |
@@ -103,6 +104,7 @@ flowchart TB
     App --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Chunks
     Titan --> SearchChunks
+    SearchChunks --> RAGAnswer[AWS Bedrock Nova Lite RAG Answer]
 ```
 
 ## Design Notes
@@ -115,12 +117,12 @@ flowchart TB
 - Deleted or missing PostgreSQL documents are not shown even if stale OpenSearch records still exist.
 - AI suggestions are staged separately from official metadata until accepted by a Loader or Admin user.
 - Gemini is useful when external API processing is acceptable.
-- AWS Bedrock Nova Lite is useful when AWS-managed model access is preferred.
+- AWS Bedrock Nova Lite is useful when AWS-managed model access is preferred and generates grounded Ask Documents answers after retrieval.
 - Ollama is useful when local/private processing is preferred.
-- The application is intentionally structured to support future enhancements such as semantic search, RAG, background jobs, document versioning, and workflow approvals.
+- The application is intentionally structured to support future enhancements such as hybrid retrieval, background jobs, document versioning, and workflow approvals.
 
 ## Source Of Truth Boundary
 
 PostgreSQL owns all canonical document state. Upload, metadata edit, AI metadata accept/reject, delete, audit, and file access flows write or read PostgreSQL first. OpenSearch is updated afterward as a derived index. If OpenSearch is unavailable, the PostgreSQL document record remains valid and can be reindexed later.
 
-The Django app is the only end-user UI. OpenSearch Dashboards is useful for operational inspection, but application users never act directly on OpenSearch records. Search and AI Search use OpenSearch for retrieval, then Django validates and hydrates results from PostgreSQL before displaying document metadata or file links.
+The Django app is the only end-user UI. OpenSearch Dashboards is useful for operational inspection, but application users never act directly on OpenSearch records. Search, AI Search, and Ask Documents use OpenSearch for retrieval, then Django validates and hydrates results from PostgreSQL before displaying document metadata, citations, or file links.

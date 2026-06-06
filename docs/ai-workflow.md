@@ -196,6 +196,9 @@ flowchart TB
     Index --> Search
     Search --> Hydrate[Hydrate PostgreSQL Documents]
     Hydrate --> Results[Ranked document results]
+    Hydrate --> RAGPrompt[Grounded Q&A prompt]
+    RAGPrompt --> Generator[AWS Bedrock Nova Lite]
+    Generator --> Answer[Answer with citations]
 ```
 
 Document chunks are stored in the database with their source text, embedding
@@ -204,11 +207,19 @@ chunk records. AI Search embeds the user's query, retrieves matching chunks from
 OpenSearch, hydrates final document records from PostgreSQL, and returns ranked
 document results through the Django UI.
 
+The Ask Documents page uses the same retrieved and hydrated chunks as grounded
+context for document question answering. AWS Bedrock Titan creates query
+embeddings, OpenSearch retrieves matching chunks, and AWS Bedrock Nova Lite
+generates the answer. Answers include citations that link back to source
+`Document` records, and empty retrieval returns a clear no-context answer
+instead of asking the model to guess.
+
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
+- RAG document Q&A retrieves OpenSearch chunks first, then uses AWS Bedrock Nova Lite only after PostgreSQL document hydration.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.
@@ -222,7 +233,6 @@ Planned future enhancements include:
 - Background AI processing queues.
 - Semantic search refinements.
 - OpenSearch-backed semantic and hybrid retrieval refinements.
-- RAG document question answering.
 - Metadata confidence scoring.
 - Duplicate document detection.
 - AI-assisted workflow approvals.
