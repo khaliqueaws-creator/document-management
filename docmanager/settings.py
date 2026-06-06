@@ -204,6 +204,12 @@ AI_RAG_MAX_CONTEXT_CHARS = int(
 AI_RAG_MAX_ANSWER_TOKENS = int(
     os.environ.get("AI_RAG_MAX_ANSWER_TOKENS", "700")
 )
+AI_RAG_MIN_CONTEXT_CHARS = int(
+    os.environ.get("AI_RAG_MIN_CONTEXT_CHARS", "80")
+)
+AI_RAG_MIN_RETRIEVAL_SCORE = float(
+    os.environ.get("AI_RAG_MIN_RETRIEVAL_SCORE", "0")
+)
 OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL", "http://opensearch:9200")
 OPENSEARCH_INDEX_PREFIX = os.environ.get(
     "OPENSEARCH_INDEX_PREFIX",

@@ -278,6 +278,8 @@ oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
 oc exec deployment/document-app -- printenv AI_RAG_TOP_K
 oc exec deployment/document-app -- printenv AI_RAG_MAX_CONTEXT_CHARS
 oc exec deployment/document-app -- printenv AI_RAG_MAX_ANSWER_TOKENS
+oc exec deployment/document-app -- printenv AI_RAG_MIN_CONTEXT_CHARS
+oc exec deployment/document-app -- printenv AI_RAG_MIN_RETRIEVAL_SCORE
 ```
 
 Expected important values:
@@ -293,6 +295,8 @@ True
 5
 1800
 700
+80
+0
 ```
 
 Then upload a document through the app. The current workflow is:
@@ -352,6 +356,8 @@ Examples that need this:
 - `AI_RAG_TOP_K`.
 - `AI_RAG_MAX_CONTEXT_CHARS`.
 - `AI_RAG_MAX_ANSWER_TOKENS`.
+- `AI_RAG_MIN_CONTEXT_CHARS`.
+- `AI_RAG_MIN_RETRIEVAL_SCORE`.
 
 ### Gemini Provider Setup
 

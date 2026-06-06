@@ -77,6 +77,13 @@ def get_document_audit_metadata(document):
     }
 
 
+def get_accessible_documents_queryset(request):
+    if is_viewer(request):
+        return Document.objects.all()
+
+    return Document.objects.none()
+
+
 def record_audit_event(request, document, action, metadata=None):
     AuditEvent.objects.create(
         document=document if document.pk else None,
@@ -635,16 +642,21 @@ def ai_search(request):
 def ask_documents(request):
     question = (request.GET.get("q") or "").strip()
     rag_result = None
+    accessible_documents = get_accessible_documents_queryset(request)
     has_embeddings = (
         DocumentChunk.objects
         .exclude(embedding=[])
         .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .filter(document__in=accessible_documents)
         .exists()
     )
 
     if question and has_embeddings:
         try:
-            rag_result = answer_question(question)
+            rag_result = answer_question(
+                question,
+                documents_queryset=accessible_documents,
+            )
         except (EmbeddingError, RAGError) as error:
             messages.warning(
                 request,

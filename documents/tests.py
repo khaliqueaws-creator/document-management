@@ -33,10 +33,14 @@ from .opensearch_indexing import (
     index_document,
 )
 from .rag import (
+    LOW_CONTEXT_REFUSAL,
     RAGError,
     answer_question,
+    build_bedrock_rag_request,
     build_rag_prompt,
     generate_rag_answer,
+    has_sufficient_context,
+    parse_bedrock_rag_response,
     retrieve_question_context,
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
@@ -1028,24 +1032,24 @@ class SemanticSearchTests(SimpleTestCase):
 class RAGTests(SimpleTestCase):
     @override_settings(
         AI_RAG_TOP_K=2,
+        AI_RAG_MIN_RETRIEVAL_SCORE=0,
         BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
         OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
     )
-    @patch("documents.rag.Document.objects.in_bulk")
     @patch("documents.rag.get_opensearch_client")
     @patch("documents.rag.get_titan_embedding")
     def test_retrieve_question_context_uses_opensearch_and_hydrates_citations(
         self,
         mock_embedding,
         mock_get_client,
-        mock_in_bulk,
     ):
         mock_embedding.return_value = [1, 0]
         document = Mock()
         document.file.name = "documents/policy.pdf"
         document.department = "HR"
         document.document_type = "Policy"
-        mock_in_bulk.return_value = {7: document}
+        accessible_documents = Mock()
+        accessible_documents.in_bulk.return_value = {7: document}
         client = Mock()
         client.search.return_value = {
             "hits": {
@@ -1071,7 +1075,10 @@ class RAGTests(SimpleTestCase):
         }
         mock_get_client.return_value = client
 
-        contexts = retrieve_question_context("when does enrollment close?")
+        contexts = retrieve_question_context(
+            "when does enrollment close?",
+            documents_queryset=accessible_documents,
+        )
 
         self.assertEqual(len(contexts), 1)
         self.assertEqual(contexts[0]["citation_id"], 1)
@@ -1080,6 +1087,59 @@ class RAGTests(SimpleTestCase):
         self.assertEqual(contexts[0]["chunk_text"], "Benefits enrollment closes Friday.")
         search_body = client.search.call_args.kwargs["body"]
         self.assertEqual(search_body["query"]["knn"]["embedding"]["vector"], [1, 0])
+
+    @override_settings(
+        AI_RAG_TOP_K=2,
+        AI_RAG_MIN_RETRIEVAL_SCORE=0,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.rag.get_opensearch_client")
+    @patch("documents.rag.get_titan_embedding")
+    def test_retrieve_question_context_hydrates_only_accessible_documents(
+        self,
+        mock_embedding,
+        mock_get_client,
+    ):
+        mock_embedding.return_value = [1, 0]
+        accessible_document = Mock()
+        accessible_document.file.name = "documents/allowed.pdf"
+        accessible_documents = Mock()
+        accessible_documents.in_bulk.return_value = {7: accessible_document}
+        client = Mock()
+        client.search.return_value = {
+            "hits": {
+                "hits": [
+                    {
+                        "_score": 1.9,
+                        "_source": {
+                            "document_id": 7,
+                            "chunk_index": 0,
+                            "chunk_text": "Allowed policy context.",
+                        },
+                    },
+                    {
+                        "_score": 1.8,
+                        "_source": {
+                            "document_id": 8,
+                            "chunk_index": 0,
+                            "chunk_text": "Restricted policy context.",
+                        },
+                    },
+                ]
+            }
+        }
+        mock_get_client.return_value = client
+
+        contexts = retrieve_question_context(
+            "what policies apply?",
+            documents_queryset=accessible_documents,
+        )
+
+        accessible_documents.in_bulk.assert_called_once_with([7, 8])
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0]["document"], accessible_document)
+        self.assertEqual(contexts[0]["document_id"], 7)
 
     @override_settings(AI_RAG_MAX_CONTEXT_CHARS=50)
     def test_build_rag_prompt_includes_question_context_and_citation_rules(self):
@@ -1103,6 +1163,42 @@ class RAGTests(SimpleTestCase):
         self.assertIn("documents/policy.pdf", prompt)
         self.assertIn("using only the provided document excerpts", prompt)
 
+    @override_settings(AI_RAG_MAX_ANSWER_TOKENS=321)
+    def test_build_bedrock_rag_request_uses_rag_generation_settings(self):
+        request_body = build_bedrock_rag_request("prompt text")
+
+        self.assertEqual(
+            request_body["messages"][0]["content"][0]["text"],
+            "prompt text",
+        )
+        self.assertEqual(request_body["inferenceConfig"]["temperature"], 0.2)
+        self.assertEqual(request_body["inferenceConfig"]["maxTokens"], 321)
+
+    def test_parse_bedrock_rag_response_returns_answer_text(self):
+        payload = {
+            "output": {
+                "message": {
+                    "content": [
+                        {"text": " Grounded answer [1]. "},
+                    ]
+                }
+            }
+        }
+
+        self.assertEqual(
+            parse_bedrock_rag_response(payload),
+            "Grounded answer [1].",
+        )
+
+    def test_parse_bedrock_rag_response_rejects_invalid_payloads(self):
+        with self.assertRaises(RAGError):
+            parse_bedrock_rag_response({"output": {}})
+
+        with self.assertRaises(RAGError):
+            parse_bedrock_rag_response({
+                "output": {"message": {"content": [{"text": "   "}]}}
+            })
+
     @patch("documents.rag.generate_answer_with_bedrock")
     def test_generate_rag_answer_uses_bedrock(self, mock_bedrock):
         mock_bedrock.return_value = "Answer [1]"
@@ -1125,11 +1221,34 @@ class RAGTests(SimpleTestCase):
         mock_context.return_value = [citation]
         mock_generate.return_value = "Use the policy [1]."
 
-        result = answer_question("What policy applies?")
+        with self.settings(AI_RAG_MIN_CONTEXT_CHARS=1):
+            result = answer_question("What policy applies?")
 
         self.assertFalse(result["empty"])
         self.assertEqual(result["answer"], "Use the policy [1].")
         self.assertEqual(result["citations"], [citation])
+
+    @patch("documents.rag.generate_rag_answer")
+    @patch("documents.rag.retrieve_question_context")
+    def test_answer_question_refuses_low_context_without_generation(
+        self,
+        mock_context,
+        mock_generate,
+    ):
+        citation = {
+            "citation_id": 1,
+            "document": Mock(),
+            "chunk_text": "Short",
+        }
+        mock_context.return_value = [citation]
+
+        with self.settings(AI_RAG_MIN_CONTEXT_CHARS=20):
+            result = answer_question("What policy applies?")
+
+        self.assertTrue(result["empty"])
+        self.assertEqual(result["answer"], LOW_CONTEXT_REFUSAL)
+        self.assertEqual(result["citations"], [citation])
+        mock_generate.assert_not_called()
 
     @patch("documents.rag.retrieve_question_context")
     def test_answer_question_handles_empty_retrieval(self, mock_context):
@@ -1140,3 +1259,12 @@ class RAGTests(SimpleTestCase):
         self.assertTrue(result["empty"])
         self.assertEqual(result["citations"], [])
         self.assertIn("do not contain enough", result["answer"])
+
+    @override_settings(AI_RAG_MIN_CONTEXT_CHARS=10)
+    def test_has_sufficient_context_checks_combined_allowed_context(self):
+        self.assertFalse(has_sufficient_context([
+            {"chunk_text": "tiny"},
+        ]))
+        self.assertTrue(has_sufficient_context([
+            {"chunk_text": "enough context here"},
+        ]))

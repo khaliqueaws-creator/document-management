@@ -211,7 +211,9 @@ The Ask Documents page uses the same retrieved and hydrated chunks as grounded
 context for document question answering. AWS Bedrock Titan creates query
 embeddings, OpenSearch retrieves matching chunks, and AWS Bedrock Nova Lite
 generates the answer. Answers include citations that link back to source
-`Document` records, and empty retrieval returns a clear no-context answer
+`Document` records. Retrieved chunks are hydrated through the current
+request's accessible PostgreSQL `Document` queryset before they are included in
+the prompt. Empty or low-context retrieval returns a clear no-context answer
 instead of asking the model to guess.
 
 ## Current AI Design Decisions
@@ -219,7 +221,7 @@ instead of asking the model to guess.
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
-- RAG document Q&A retrieves OpenSearch chunks first, then uses AWS Bedrock Nova Lite only after PostgreSQL document hydration.
+- RAG document Q&A retrieves OpenSearch chunks first, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.

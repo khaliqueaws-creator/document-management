@@ -102,6 +102,8 @@ The prompt tells Nova Lite to:
 - answer only from the provided excerpts
 - cite factual claims with bracketed ids such as `[1]`
 - say when the excerpts do not contain enough information
+- avoid using or implying knowledge from documents that are not included in the
+  retrieved excerpts
 
 Conceptually, the prompt looks like this:
 
@@ -124,6 +126,19 @@ Excerpt: Benefits enrollment must be completed during open enrollment...
 ```
 
 The model sees only the retrieved context, not the whole database.
+
+## Permission Boundary
+
+The RAG service accepts an explicit accessible-document queryset from the Django
+view. Today the application permissions are role-based through Okta groups, so a
+Viewer can ask across the same documents that Viewer can search and open. The
+retrieval step may find OpenSearch chunk candidates, but citations are only
+created after those candidates hydrate through the accessible PostgreSQL
+`Document` queryset.
+
+That boundary matters because OpenSearch is a derived index. If future
+row-level document ACLs are added, the accessible queryset can become narrower
+without changing the Bedrock prompt or generation path.
 
 ## UI Flow
 
@@ -160,6 +175,8 @@ The main RAG settings are:
 | `AI_RAG_TOP_K` | Number of retrieved chunks used as answer context |
 | `AI_RAG_MAX_CONTEXT_CHARS` | Maximum characters included from each chunk |
 | `AI_RAG_MAX_ANSWER_TOKENS` | Maximum generated answer tokens |
+| `AI_RAG_MIN_CONTEXT_CHARS` | Minimum combined retrieved text required before generation |
+| `AI_RAG_MIN_RETRIEVAL_SCORE` | Optional retrieval score floor before a chunk can be used |
 | `BEDROCK_TIMEOUT_SECONDS` | Bedrock client timeout |
 | `OPENSEARCH_CHUNK_INDEX` | OpenSearch chunk vector index |
 
@@ -171,6 +188,8 @@ BEDROCK_EMBED_MODEL_ID: "amazon.titan-embed-text-v2:0"
 AI_RAG_TOP_K: "5"
 AI_RAG_MAX_CONTEXT_CHARS: "1800"
 AI_RAG_MAX_ANSWER_TOKENS: "700"
+AI_RAG_MIN_CONTEXT_CHARS: "80"
+AI_RAG_MIN_RETRIEVAL_SCORE: "0"
 ```
 
 ## Failure Behavior
@@ -185,6 +204,10 @@ If retrieval returns no chunks, the app returns:
 ```text
 The available documents do not contain enough relevant information to answer this question.
 ```
+
+The same refusal is returned before calling Bedrock if the retrieved accessible
+chunks do not meet the minimum context length. This keeps low-context answers
+from turning into guesses.
 
 If Bedrock or OpenSearch fails, the Django view catches the error and shows a
 warning message instead of breaking document browsing or search.
@@ -223,9 +246,7 @@ The main implementation files are:
 Useful next steps for learning and production hardening:
 
 - hybrid keyword plus vector retrieval
-- minimum score thresholds before generation
 - citation id validation after generation
-- role-based document filtering before citations are shown
 - streaming answers
 - answer audit events
 - per-question cost and latency metrics

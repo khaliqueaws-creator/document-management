@@ -131,6 +131,8 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 | AI_RAG_TOP_K | 5 | Number of retrieved chunks to include as Q&A context. |
 | AI_RAG_MAX_CONTEXT_CHARS | 1800 | Maximum characters included from each retrieved chunk. |
 | AI_RAG_MAX_ANSWER_TOKENS | 700 | Maximum answer tokens requested from Bedrock Nova Lite. |
+| AI_RAG_MIN_CONTEXT_CHARS | 80 | Minimum combined retrieved context required before answer generation. |
+| AI_RAG_MIN_RETRIEVAL_SCORE | 0 | Optional OpenSearch score floor for retrieved RAG chunks. |
 
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,
