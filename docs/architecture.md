@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock.
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. The planned backend MCP retrieval boundary is defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md).
 
 ## Current OpenShift CRC Architecture
 

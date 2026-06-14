@@ -38,6 +38,10 @@ The current RAG implementation uses AWS Bedrock only:
 | Source of truth | PostgreSQL `Document` records |
 | Answer generation | AWS Bedrock Nova Lite |
 
+The planned MCP retrieval boundary is documented separately in
+[`mcp-retrieval-contract.md`](mcp-retrieval-contract.md). That contract wraps
+the retrieval step only; answer generation remains in the Django backend.
+
 ## End-To-End Call Flow
 
 ```text
@@ -245,6 +249,7 @@ The main implementation files are:
 
 Useful next steps for learning and production hardening:
 
+- MCP-backed retrieval using the documented `search_documents` contract
 - hybrid keyword plus vector retrieval
 - citation id validation after generation
 - streaming answers

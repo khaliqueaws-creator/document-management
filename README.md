@@ -17,6 +17,7 @@ Detailed architecture and operational documentation:
 - [Architecture](docs/architecture.md)
 - [Deployment Guide](docs/deployment.md)
 - [AI Workflow](docs/ai-workflow.md)
+- [MCP Document Retrieval Contract](docs/mcp-retrieval-contract.md)
 
 ## High-Level Architecture Diagram
 
@@ -257,6 +258,8 @@ Open the RAG document Q&A page:
 For a learning-focused walkthrough of the RAG call flow, model roles, prompt
 construction, and citation handling, see
 [`docs/rag-question-answering.md`](docs/rag-question-answering.md).
+For the planned MCP boundary around the same retrieval path, see
+[`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
 
 Example semantic queries:
 
