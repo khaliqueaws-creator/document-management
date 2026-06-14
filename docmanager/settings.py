@@ -102,19 +102,15 @@ WSGI_APPLICATION = 'docmanager.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-DB_ENGINE = os.environ.get("DB_ENGINE", "mysql").lower()
+DB_ENGINE = os.environ.get("DB_ENGINE", "postgresql").lower()
 
-if DB_ENGINE in ("mysql", "mariadb"):
-    DATABASE_BACKEND = "django.db.backends.mysql"
-    DEFAULT_DB_HOST = "mysql"
-    DEFAULT_DB_PORT = "3306"
-elif DB_ENGINE in ("postgres", "postgresql"):
+if DB_ENGINE in ("postgres", "postgresql"):
     DATABASE_BACKEND = "django.db.backends.postgresql"
     DEFAULT_DB_HOST = "postgresql"
     DEFAULT_DB_PORT = "5432"
 else:
     raise RuntimeError(
-        "Unsupported DB_ENGINE. Use 'mysql' or 'postgresql'."
+        "Unsupported DB_ENGINE. Use 'postgresql'."
     )
 
 DATABASES = {
@@ -199,7 +195,41 @@ BEDROCK_EMBED_MODEL_ID = os.environ.get(
 )
 BEDROCK_TIMEOUT_SECONDS = int(os.environ.get("BEDROCK_TIMEOUT_SECONDS", "90"))
 AI_EMBEDDING_MAX_CHARS = int(os.environ.get("AI_EMBEDDING_MAX_CHARS", "2500"))
+AI_EMBEDDING_DIMENSIONS = int(os.environ.get("AI_EMBEDDING_DIMENSIONS", "1024"))
 AI_SEARCH_TOP_K = int(os.environ.get("AI_SEARCH_TOP_K", "5"))
+AI_RAG_TOP_K = int(os.environ.get("AI_RAG_TOP_K", "5"))
+AI_RAG_MAX_CONTEXT_CHARS = int(
+    os.environ.get("AI_RAG_MAX_CONTEXT_CHARS", "1800")
+)
+AI_RAG_MAX_ANSWER_TOKENS = int(
+    os.environ.get("AI_RAG_MAX_ANSWER_TOKENS", "700")
+)
+AI_RAG_MIN_CONTEXT_CHARS = int(
+    os.environ.get("AI_RAG_MIN_CONTEXT_CHARS", "80")
+)
+AI_RAG_MIN_RETRIEVAL_SCORE = float(
+    os.environ.get("AI_RAG_MIN_RETRIEVAL_SCORE", "0")
+)
+OPENSEARCH_URL = os.environ.get("OPENSEARCH_URL", "http://opensearch:9200")
+OPENSEARCH_INDEX_PREFIX = os.environ.get(
+    "OPENSEARCH_INDEX_PREFIX",
+    "docmanager",
+)
+OPENSEARCH_DOCUMENT_INDEX = os.environ.get(
+    "OPENSEARCH_DOCUMENT_INDEX",
+    f"{OPENSEARCH_INDEX_PREFIX}-documents",
+)
+OPENSEARCH_CHUNK_INDEX = os.environ.get(
+    "OPENSEARCH_CHUNK_INDEX",
+    f"{OPENSEARCH_INDEX_PREFIX}-document-chunks",
+)
+OPENSEARCH_TIMEOUT_SECONDS = int(
+    os.environ.get("OPENSEARCH_TIMEOUT_SECONDS", "10")
+)
+OPENSEARCH_INDEX_ON_SAVE = os.environ.get(
+    "OPENSEARCH_INDEX_ON_SAVE",
+    "True",
+).lower() in ("1", "true", "yes")
 
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",

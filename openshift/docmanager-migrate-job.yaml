@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
         - name: migrate
-          image: image-registry.openshift-image-registry.svc:5000/docmanager/document-app:latest
+          image: docker.io/khalique/document-app:1.7-rag
           command:
             - python
             - manage.py

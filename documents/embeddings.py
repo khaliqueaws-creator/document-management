@@ -110,11 +110,20 @@ def rebuild_document_embeddings(document):
     chunks = chunk_text(text)
 
     for index, chunk in enumerate(chunks):
+        embedding = get_titan_embedding(chunk)
+
+        if len(embedding) != settings.AI_EMBEDDING_DIMENSIONS:
+            raise EmbeddingError(
+                "Bedrock embedding dimension mismatch: "
+                f"expected {settings.AI_EMBEDDING_DIMENSIONS}, "
+                f"got {len(embedding)}."
+            )
+
         DocumentChunk.objects.create(
             document=document,
             chunk_index=index,
             chunk_text=chunk,
-            embedding=get_titan_embedding(chunk),
+            embedding=embedding,
             embedding_model=settings.BEDROCK_EMBED_MODEL_ID,
         )
 

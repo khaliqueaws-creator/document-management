@@ -5,7 +5,14 @@ from django.conf import settings
 from django.core.files import File
 from django.core.management.base import BaseCommand, CommandError
 
+from documents.embeddings import EmbeddingError, rebuild_document_embeddings
 from documents.models import Document
+from documents.opensearch_indexing import (
+    OpenSearchIndexingError,
+    ensure_indexes,
+    get_opensearch_client,
+    reindex_document,
+)
 from documents.views import extract_text_from_file, normalize_ocr_language
 
 
@@ -47,6 +54,21 @@ class Command(BaseCommand):
             ],
             help="OCR language for image and scanned PDF extraction.",
         )
+        parser.add_argument(
+            "--rebuild-embeddings",
+            action="store_true",
+            help="Generate Bedrock embeddings for imported documents.",
+        )
+        parser.add_argument(
+            "--reindex-opensearch",
+            action="store_true",
+            help="Index imported documents and chunks in OpenSearch.",
+        )
+        parser.add_argument(
+            "--create-indexes",
+            action="store_true",
+            help="Create OpenSearch indexes before indexing documents.",
+        )
 
     def handle(self, *args, **options):
         source_dir = Path(options["source_dir"])
@@ -62,7 +84,16 @@ class Command(BaseCommand):
 
         processed = 0
         imported = 0
+        embedded = 0
+        indexed = 0
         failed = 0
+        opensearch_client = None
+
+        if options["reindex_opensearch"]:
+            opensearch_client = get_opensearch_client()
+
+            if options["create_indexes"]:
+                ensure_indexes(client=opensearch_client)
 
         for source_path in supported_files:
             processed += 1
@@ -75,12 +106,48 @@ class Command(BaseCommand):
                 continue
 
             imported += 1
+            chunks_created = None
+            chunks_indexed = None
+
+            if options["rebuild_embeddings"]:
+                try:
+                    chunks_created = rebuild_document_embeddings(document)
+                    embedded += 1
+                except EmbeddingError as error:
+                    self.stderr.write(
+                        f"Document {document.id} {document.file.name}: "
+                        f"embedding ERROR {error}"
+                    )
+
+            if options["reindex_opensearch"]:
+                try:
+                    chunks_indexed = reindex_document(
+                        document,
+                        client=opensearch_client,
+                    )
+                    indexed += 1
+                except OpenSearchIndexingError as error:
+                    self.stderr.write(
+                        f"Document {document.id} {document.file.name}: "
+                        f"OpenSearch ERROR {error}"
+                    )
+
+            status_parts = ["imported"]
+
+            if chunks_created is not None:
+                status_parts.append(f"{chunks_created} chunks embedded")
+
+            if chunks_indexed is not None:
+                status_parts.append(f"{chunks_indexed} chunks indexed")
+
             self.stdout.write(
-                f"Document {document.id} {document.file.name}: imported"
+                f"Document {document.id} {document.file.name}: "
+                f"{'; '.join(status_parts)}"
             )
 
         self.stdout.write(
-            f"Done. processed={processed} imported={imported} failed={failed}"
+            f"Done. processed={processed} imported={imported} "
+            f"embedded={embedded} indexed={indexed} failed={failed}"
         )
 
     def get_supported_files(self, source_dir):

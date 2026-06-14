@@ -1,6 +1,6 @@
 # Intelligent Document Management Platform
 
-A Django-based intelligent document management application deployed on OpenShift CRC with MySQL or PostgreSQL, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, and semantic AI search.
+A Django-based intelligent document management application deployed on OpenShift CRC with PostgreSQL, OpenSearch, persistent document storage, Okta authentication, OCR, audit logging, AI metadata suggestions, AWS Bedrock embeddings, semantic AI search, and RAG document Q&A.
 
 The public demo path used during development is:
 
@@ -17,6 +17,7 @@ Detailed architecture and operational documentation:
 - [Architecture](docs/architecture.md)
 - [Deployment Guide](docs/deployment.md)
 - [AI Workflow](docs/ai-workflow.md)
+- [MCP Document Retrieval Contract](docs/mcp-retrieval-contract.md)
 
 ## High-Level Architecture Diagram
 
@@ -27,7 +28,7 @@ flowchart LR
     OpenShift --> Django[Django + Gunicorn]
 
     Django --> PostgreSQL[(PostgreSQL)]
-    Django -. rollback .-> MySQL[(MySQL)]
+    Django --> OpenSearch[(OpenSearch)]
     Django --> Storage[(Media PVC)]
 
     Django --> OCR[Tesseract OCR]
@@ -38,14 +39,15 @@ flowchart LR
     AI --> Bedrock[AWS Bedrock Nova Lite]
 
     Django --> Embeddings[AWS Bedrock Titan Embeddings]
-    Embeddings --> Chunks[(DocumentChunk embeddings)]
+    Embeddings --> Chunks[(PostgreSQL DocumentChunk JSON embeddings)]
+    Chunks --> OpenSearch
 ```
 
 ## Project Purpose
 
 This project is a learning and architecture build for an enterprise-style document management and intelligent document processing platform. The goal is to grow a simple upload/search application into a practical ECM/IDP-style system using open-source components and production-like deployment patterns.
 
-The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, AI-assisted metadata suggestions, document embeddings, and semantic AI search.
+The platform currently supports document upload, metadata capture, OCR and text extraction, secure viewing, role-based access, audit history, OpenShift deployment, AI-assisted metadata suggestions, document embeddings, semantic AI search, and grounded document question answering.
 
 ## Current Feature Set
 
@@ -71,6 +73,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
 - Rebuild embeddings in batch with a Django management command.
 - Search documents by meaning through the AI Search page.
+- Ask document questions with retrieved chunk citations through the Ask Documents page.
 - Bulk import local test documents through a Django management command.
 - Use synthetic Word, Excel, PDF, and OCR image samples from `test_documents/`.
 
@@ -81,7 +84,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Frontend | Django templates, server-rendered HTML/CSS |
 | Backend | Python, Django |
 | App server | Gunicorn |
-| Database | PostgreSQL active, MySQL retained as optional fallback |
+| Database | PostgreSQL |
 | File storage | OpenShift PersistentVolumeClaim |
 | OCR | Tesseract, pdf2image, Pillow |
 | Document parsing | pypdf, python-docx, openpyxl |
@@ -89,9 +92,11 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Authorization | Okta groups stored in Django session |
 | AI metadata | Switchable Ollama, Gemini, or AWS Bedrock provider |
 | AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
-| Semantic search | JSON embeddings with cosine similarity |
+| Search index | OpenSearch document and chunk indexes |
+| Semantic search | AWS Bedrock query embeddings with OpenSearch k-NN retrieval |
+| RAG Q&A | OpenSearch chunk retrieval with AWS Bedrock Nova Lite answer generation |
 | Container platform | OpenShift CRC |
-| Container image | Docker build through OpenShift binary build |
+| Container image | Docker Hub image `docker.io/khalique/document-app:1.7-rag` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -106,18 +111,21 @@ Browser
 
 Django
   -> document media PVC
+  -> OpenSearch Service and OpenSearch PVC
   -> Ollama Service and Ollama model PVC
   -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
   -> AWS Bedrock Titan Embeddings over HTTPS
   -> DocumentChunk rows in PostgreSQL
+  -> OpenSearch document and chunk indexes
 ```
 
-The Django application and database run as separate OpenShift deployments. PostgreSQL is the active OpenShift database with `DB_ENGINE=postgresql`. MySQL support remains available through `DB_ENGINE=mysql` and the MySQL manifests are retained as a rollback option. Uploaded documents live on the media PVC. Ollama remains available as a local/private provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval runs through OpenSearch; PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. Ollama remains available as a local/private metadata provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
-## Database Backend Selection
+## Database Backend
 
-The application chooses its Django database backend from `DB_ENGINE`.
+The application uses PostgreSQL. `DB_ENGINE` defaults to `postgresql`; other
+database engines are not supported by the current application image.
 
 Current PostgreSQL configuration:
 
@@ -128,21 +136,10 @@ DB_USER=docuser
 DB_PASSWORD=<database-password>
 DB_HOST=postgresql
 DB_PORT=5432
+AI_EMBEDDING_DIMENSIONS=1024
 ```
 
-Optional MySQL rollback configuration:
-
-```text
-DB_ENGINE=mysql
-DB_NAME=document_management
-DB_USER=docuser
-DB_PASSWORD=<database-password>
-DB_HOST=mysql
-DB_PORT=3306
-```
-
-The models and migrations are shared across both backends. After switching
-database settings, restart the app and run migrations:
+After changing database settings, restart the app and run migrations:
 
 ```powershell
 oc rollout restart deployment/document-app
@@ -221,7 +218,7 @@ Then regenerate AI metadata on a document from the edit metadata page. The AI Su
 
 ## AI Embeddings and Semantic Search
 
-The application stores semantic embeddings in `DocumentChunk` records. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, and saved as JSON vectors in the active database.
+The application stores semantic embeddings in `DocumentChunk` records and indexes derived chunk vectors in OpenSearch. Each uploaded document's extracted text is split into paragraph-aware chunks, sent to AWS Bedrock Titan Text Embeddings V2, saved in PostgreSQL for rebuild/debug support, and indexed into OpenSearch for AI Search retrieval.
 
 Embeddings are generated automatically after upload when extracted text is available. If embedding generation fails, upload still succeeds and AI metadata suggestions continue.
 
@@ -231,11 +228,38 @@ Rebuild embeddings for existing documents:
 oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 ```
 
+Rebuild OpenSearch indexes from PostgreSQL:
+
+```powershell
+oc exec deployment/document-app -- python manage.py reindex_opensearch --create-indexes
+```
+
+Check AI Search dependency health:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_ai_search
+```
+
+Use `--skip-bedrock` when you only want PostgreSQL and OpenSearch diagnostics
+without making a live AWS Bedrock embedding call.
+
 Open the AI Search page:
 
 ```text
 /ai-search/
 ```
+
+Open the RAG document Q&A page:
+
+```text
+/ask/
+```
+
+For a learning-focused walkthrough of the RAG call flow, model roles, prompt
+construction, and citation handling, see
+[`docs/rag-question-answering.md`](docs/rag-question-answering.md).
+For the planned MCP boundary around the same retrieval path, see
+[`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
 
 Example semantic queries:
 
@@ -247,6 +271,14 @@ privacy impact
 expense reimbursement
 ```
 
+Example document questions:
+
+```text
+What are the onboarding requirements?
+Which documents mention vendor invoices?
+What privacy risks are described?
+```
+
 ## Bulk Test Document Import
 
 The repository includes synthetic test documents under `test_documents/`:
@@ -256,27 +288,30 @@ test_documents/word/
 test_documents/excel/
 test_documents/pdf/
 test_documents/ocr_images/
+test_documents/rag_health_policy/
 ```
 
-These files are generated for upload, OCR, metadata, embedding, and AI Search testing.
+These files are generated for upload, OCR, metadata, embedding, AI Search, and
+RAG document Q&A testing.
 
 Copy them into the running OpenShift pod:
 
 ```powershell
 oc get pods -l app=document-app
-oc cp test_documents <document-app-pod>:/tmp/test_documents
+oc rsync .\test_documents\pdf\ <document-app-pod>:/tmp/bulk-docs
 ```
 
-Import a batch:
+Import a batch and prepare AI Search:
 
 ```powershell
-oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/test_documents --limit 20
+oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 20 --rebuild-embeddings --reindex-opensearch --create-indexes
 ```
 
-Then create embeddings:
+Import the focused RAG test bundle:
 
 ```powershell
-oc exec deployment/document-app -- python manage.py rebuild_embeddings
+oc rsync .\test_documents\rag_health_policy\ <document-app-pod>:/tmp/rag-health-policy
+oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/rag-health-policy --rebuild-embeddings --reindex-opensearch --create-indexes
 ```
 
 Run lightweight tests inside OpenShift:
