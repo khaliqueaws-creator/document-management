@@ -8,6 +8,7 @@ env
 .venv
 
 media
+test_documents
 db.sqlite3
 env.txt
 disk.bash
