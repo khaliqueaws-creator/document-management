@@ -32,6 +32,11 @@ if not SECRET_KEY:
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
 
+
+def env_bool(name, default=False):
+    default_value = "True" if default else "False"
+    return os.environ.get(name, default_value).lower() in ("1", "true", "yes")
+
 OKTA_DOMAIN = os.getenv("OKTA_DOMAIN")
 OKTA_ISSUER = os.getenv("OKTA_ISSUER")
 OKTA_CLIENT_ID = os.getenv("OKTA_CLIENT_ID")
@@ -230,6 +235,11 @@ OPENSEARCH_INDEX_ON_SAVE = os.environ.get(
     "OPENSEARCH_INDEX_ON_SAVE",
     "True",
 ).lower() in ("1", "true", "yes")
+MCP_RETRIEVAL_ENABLED = env_bool("MCP_RETRIEVAL_ENABLED", False)
+MCP_RETRIEVAL_FALLBACK_ENABLED = env_bool(
+    "MCP_RETRIEVAL_FALLBACK_ENABLED",
+    True,
+)
 
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",

@@ -42,6 +42,7 @@ from .rag import (
     generate_rag_answer,
     has_sufficient_context,
     parse_bedrock_rag_response,
+    retrieve_answer_context,
     retrieve_question_context,
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
@@ -1269,6 +1270,126 @@ class RAGTests(SimpleTestCase):
         self.assertTrue(has_sufficient_context([
             {"chunk_text": "enough context here"},
         ]))
+
+    @override_settings(MCP_RETRIEVAL_ENABLED=False)
+    @patch("documents.rag.retrieve_question_context")
+    def test_retrieve_answer_context_uses_direct_path_when_mcp_disabled(
+        self,
+        mock_direct,
+    ):
+        direct_context = [{"citation_id": 1}]
+        accessible_documents = Mock()
+        mock_direct.return_value = direct_context
+
+        contexts = retrieve_answer_context(
+            "What policy applies?",
+            documents_queryset=accessible_documents,
+        )
+
+        self.assertEqual(contexts, direct_context)
+        mock_direct.assert_called_once_with(
+            "What policy applies?",
+            documents_queryset=accessible_documents,
+        )
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=True,
+        AI_RAG_TOP_K=3,
+        AI_RAG_MAX_CONTEXT_CHARS=1800,
+    )
+    @patch("documents.mcp_retrieval.search_documents")
+    def test_retrieve_answer_context_uses_mcp_when_enabled(self, mock_mcp):
+        document = Mock()
+        document.id = 42
+        document.file.name = "documents/policy.pdf"
+        accessible_documents = Mock()
+        accessible_documents.in_bulk.return_value = {42: document}
+        mock_mcp.return_value = {
+            "status": "ok",
+            "results": [
+                {
+                    "citation_id": 1,
+                    "document_id": 42,
+                    "chunk_id": 99,
+                    "chunk_index": 0,
+                    "snippet": "Policy context",
+                    "score": 1.4,
+                }
+            ],
+        }
+
+        contexts = retrieve_answer_context(
+            "What policy applies?",
+            documents_queryset=accessible_documents,
+        )
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0]["document"], document)
+        self.assertEqual(contexts[0]["chunk_text"], "Policy context")
+        self.assertEqual(contexts[0]["score"], 1.4)
+        payload = mock_mcp.call_args.args[0]
+        self.assertEqual(payload["query"], "What policy applies?")
+        self.assertEqual(payload["options"]["max_results"], 3)
+        self.assertEqual(payload["trace"]["source"], "answer_question")
+        self.assertEqual(
+            mock_mcp.call_args.kwargs["documents_queryset"],
+            accessible_documents,
+        )
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=True,
+    )
+    @patch("documents.rag.retrieve_question_context")
+    @patch("documents.mcp_retrieval.search_documents")
+    def test_retrieve_answer_context_falls_back_when_mcp_fails(
+        self,
+        mock_mcp,
+        mock_direct,
+    ):
+        accessible_documents = Mock()
+        fallback_context = [{"citation_id": 1, "chunk_text": "Direct context"}]
+        mock_mcp.return_value = {
+            "status": "error",
+            "error": {"code": "retrieval_unavailable"},
+        }
+        mock_direct.return_value = fallback_context
+
+        contexts = retrieve_answer_context(
+            "What policy applies?",
+            documents_queryset=accessible_documents,
+        )
+
+        self.assertEqual(contexts, fallback_context)
+        mock_direct.assert_called_once_with(
+            "What policy applies?",
+            documents_queryset=accessible_documents,
+        )
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=False,
+    )
+    @patch("documents.rag.retrieve_question_context")
+    @patch("documents.mcp_retrieval.search_documents")
+    def test_retrieve_answer_context_raises_without_fallback(
+        self,
+        mock_mcp,
+        mock_direct,
+    ):
+        mock_mcp.return_value = {
+            "status": "error",
+            "error": {"code": "permission_denied"},
+        }
+
+        with self.assertRaisesMessage(
+            RAGError,
+            "MCP retrieval failed: permission_denied",
+        ):
+            retrieve_answer_context("What policy applies?", documents_queryset=Mock())
+
+        mock_direct.assert_not_called()
 
 
 class MCPRetrievalTests(SimpleTestCase):

@@ -116,6 +116,95 @@ def retrieve_question_context(question, top_k=None, documents_queryset=None):
     return contexts
 
 
+def build_mcp_retrieval_payload(question):
+    return {
+        "query": question,
+        "user_context": {},
+        "options": {
+            "max_results": settings.AI_RAG_TOP_K,
+            "max_chunk_chars": settings.AI_RAG_MAX_CONTEXT_CHARS,
+            "include_snippets": True,
+            "include_citations": True,
+            "include_document_metadata": True,
+        },
+        "trace": {
+            "source": "answer_question",
+        },
+    }
+
+
+def mcp_response_to_contexts(response, documents_queryset=None):
+    results = response.get("results") or []
+    document_ids = [
+        result.get("document_id")
+        for result in results
+        if result.get("document_id") is not None
+    ]
+    documents_by_id = get_accessible_documents(documents_queryset).in_bulk(
+        document_ids
+    )
+    contexts = []
+
+    for result in results:
+        document_id = result.get("document_id")
+        document = documents_by_id.get(document_id)
+
+        if document is None:
+            continue
+
+        contexts.append({
+            "citation_id": len(contexts) + 1,
+            "document": document,
+            "document_id": document_id,
+            "chunk_id": result.get("chunk_id"),
+            "chunk_index": result.get("chunk_index"),
+            "chunk_text": result.get("snippet", ""),
+            "score": result.get("score", 0),
+        })
+
+    return contexts
+
+
+def retrieve_question_context_via_mcp(question, documents_queryset=None):
+    from .mcp_retrieval import search_documents as mcp_search_documents
+
+    response = mcp_search_documents(
+        build_mcp_retrieval_payload(question),
+        documents_queryset=documents_queryset,
+    )
+
+    if response.get("status") == "ok":
+        return mcp_response_to_contexts(
+            response,
+            documents_queryset=documents_queryset,
+        )
+
+    error = response.get("error") or {}
+    code = error.get("code") or "internal_error"
+    raise RAGError(f"MCP retrieval failed: {code}")
+
+
+def retrieve_answer_context(question, documents_queryset=None):
+    if not settings.MCP_RETRIEVAL_ENABLED:
+        return retrieve_question_context(
+            question,
+            documents_queryset=documents_queryset,
+        )
+
+    try:
+        return retrieve_question_context_via_mcp(
+            question,
+            documents_queryset=documents_queryset,
+        )
+    except RAGError:
+        if not settings.MCP_RETRIEVAL_FALLBACK_ENABLED:
+            raise
+        return retrieve_question_context(
+            question,
+            documents_queryset=documents_queryset,
+        )
+
+
 def has_sufficient_context(contexts):
     min_chars = settings.AI_RAG_MIN_CONTEXT_CHARS
 
@@ -240,7 +329,7 @@ def answer_question(question, documents_queryset=None):
             "empty": True,
         }
 
-    contexts = retrieve_question_context(
+    contexts = retrieve_answer_context(
         question,
         documents_queryset=documents_queryset,
     )

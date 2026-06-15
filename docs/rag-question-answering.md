@@ -181,6 +181,8 @@ The main RAG settings are:
 | `AI_RAG_MAX_ANSWER_TOKENS` | Maximum generated answer tokens |
 | `AI_RAG_MIN_CONTEXT_CHARS` | Minimum combined retrieved text required before generation |
 | `AI_RAG_MIN_RETRIEVAL_SCORE` | Optional retrieval score floor before a chunk can be used |
+| `MCP_RETRIEVAL_ENABLED` | Enables the backend MCP retrieval boundary for RAG retrieval |
+| `MCP_RETRIEVAL_FALLBACK_ENABLED` | Falls back to direct retrieval when MCP retrieval fails |
 | `BEDROCK_TIMEOUT_SECONDS` | Bedrock client timeout |
 | `OPENSEARCH_CHUNK_INDEX` | OpenSearch chunk vector index |
 
@@ -194,6 +196,8 @@ AI_RAG_MAX_CONTEXT_CHARS: "1800"
 AI_RAG_MAX_ANSWER_TOKENS: "700"
 AI_RAG_MIN_CONTEXT_CHARS: "80"
 AI_RAG_MIN_RETRIEVAL_SCORE: "0"
+MCP_RETRIEVAL_ENABLED: "False"
+MCP_RETRIEVAL_FALLBACK_ENABLED: "True"
 ```
 
 ## Failure Behavior

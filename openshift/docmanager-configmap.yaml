@@ -35,6 +35,8 @@ data:
   OPENSEARCH_DOCUMENT_INDEX: "docmanager-documents"
   OPENSEARCH_CHUNK_INDEX: "docmanager-document-chunks"
   OPENSEARCH_TIMEOUT_SECONDS: "10"
+  MCP_RETRIEVAL_ENABLED: "False"
+  MCP_RETRIEVAL_FALLBACK_ENABLED: "True"
   AUTO_AI_METADATA_ON_UPLOAD: "True"
   ALLOWED_HOSTS: "document-app-document-app.apps-crc.testing,localhost,127.0.0.1,docsdemo.khalique.net"
   MEDIA_ROOT: "/app/media"
