@@ -21,6 +21,7 @@ from .embeddings import (
     get_titan_embedding,
     rebuild_document_embeddings,
 )
+from .mcp_retrieval import search_documents as mcp_search_documents
 from .opensearch_indexing import (
     OpenSearchIndexingError,
     build_metadata_filter_query,
@@ -1268,3 +1269,182 @@ class RAGTests(SimpleTestCase):
         self.assertTrue(has_sufficient_context([
             {"chunk_text": "enough context here"},
         ]))
+
+
+class MCPRetrievalTests(SimpleTestCase):
+    def build_document(self):
+        document = Mock()
+        document.file.name = "documents/policy.pdf"
+        document.document_type = "Policy"
+        document.document_subtype = "Benefits"
+        document.department = "HR"
+        document.author = "Admin"
+        document.tags = "benefits, health"
+        document.uploaded_at = SimpleNamespace(
+            isoformat=Mock(return_value="2026-06-01T12:00:00+00:00")
+        )
+        return document
+
+    @override_settings(
+        AI_RAG_TOP_K=2,
+        AI_RAG_MAX_CONTEXT_CHARS=20,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_returns_contract_response(self, mock_retrieve):
+        document = self.build_document()
+        mock_retrieve.return_value = [
+            {
+                "citation_id": 1,
+                "document": document,
+                "document_id": 42,
+                "chunk_id": 99,
+                "chunk_index": 0,
+                "chunk_text": "Coverage starts after eligibility is verified.",
+                "score": 1.7,
+            }
+        ]
+        accessible_documents = Mock()
+
+        response = mcp_search_documents(
+            {
+                "query": "When does coverage start?",
+                "user_context": {"roles": ["viewer"]},
+                "options": {"max_results": 1, "max_chunk_chars": 18},
+                "trace": {"request_id": "request-123"},
+            },
+            documents_queryset=accessible_documents,
+        )
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["query"], "When does coverage start?")
+        self.assertEqual(response["trace"]["request_id"], "request-123")
+        self.assertEqual(response["summary"]["returned_count"], 1)
+        result = response["results"][0]
+        self.assertEqual(result["citation_id"], 1)
+        self.assertEqual(result["document_id"], 42)
+        self.assertEqual(result["chunk_id"], 99)
+        self.assertEqual(result["snippet"], "Coverage starts af")
+        self.assertEqual(result["source"]["department"], "HR")
+        self.assertEqual(result["source"]["tags"], ["benefits", "health"])
+        self.assertEqual(result["source"]["open_url"], "/view/42/")
+        self.assertEqual(
+            result["retrieval"]["embedding_model"],
+            "amazon.titan-embed-text-v2:0",
+        )
+        mock_retrieve.assert_called_once_with(
+            "When does coverage start?",
+            top_k=1,
+            documents_queryset=accessible_documents,
+        )
+
+    def test_search_documents_rejects_empty_query(self):
+        response = mcp_search_documents({
+            "query": " ",
+            "trace": {"request_id": "empty-request"},
+        })
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "invalid_request")
+        self.assertFalse(response["error"]["retryable"])
+        self.assertEqual(response["trace"]["request_id"], "empty-request")
+
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_returns_empty_contract_response(self, mock_retrieve):
+        mock_retrieve.return_value = []
+
+        response = mcp_search_documents(
+            {"query": "unknown topic", "user_context": {"roles": ["viewer"]}},
+            documents_queryset=Mock(),
+        )
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["results"], [])
+        self.assertEqual(
+            response["summary"]["empty_reason"],
+            "no_accessible_context",
+        )
+
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_maps_embedding_errors(self, mock_retrieve):
+        mock_retrieve.side_effect = EmbeddingError("AWS failed")
+
+        response = mcp_search_documents(
+            {"query": "policy", "user_context": {"roles": ["viewer"]}},
+            documents_queryset=Mock(),
+        )
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "embedding_provider_error")
+        self.assertTrue(response["error"]["retryable"])
+
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_maps_retrieval_errors(self, mock_retrieve):
+        mock_retrieve.side_effect = RAGError("OpenSearch retrieval failed: down")
+
+        response = mcp_search_documents(
+            {"query": "policy", "user_context": {"roles": ["viewer"]}},
+            documents_queryset=Mock(),
+        )
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "retrieval_unavailable")
+        self.assertTrue(response["error"]["retryable"])
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DjangoViewer",
+        OKTA_GROUP_LOADER="DjangoLoader",
+        OKTA_GROUP_ADMIN="DjangoAdmin",
+    )
+    @patch("documents.mcp_retrieval.Document")
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_derives_accessible_documents_from_user_context(
+        self,
+        mock_retrieve,
+        mock_document,
+    ):
+        queryset = Mock()
+        mock_document.objects.all.return_value = queryset
+        mock_retrieve.return_value = []
+
+        mcp_search_documents({
+            "query": "policy",
+            "user_context": {"groups": ["DjangoViewer"]},
+        })
+
+        mock_document.objects.all.assert_called_once()
+        mock_retrieve.assert_called_once_with(
+            "policy",
+            top_k=5,
+            documents_queryset=queryset,
+        )
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DjangoViewer",
+        OKTA_GROUP_LOADER="DjangoLoader",
+        OKTA_GROUP_ADMIN="DjangoAdmin",
+    )
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_denies_unknown_roles(
+        self,
+        mock_retrieve,
+    ):
+        response = mcp_search_documents({
+            "query": "policy",
+            "user_context": {"groups": ["UnknownGroup"]},
+        })
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "permission_denied")
+        self.assertFalse(response["error"]["retryable"])
+        mock_retrieve.assert_not_called()
+
+    @patch("documents.mcp_retrieval.retrieve_question_context")
+    def test_search_documents_requires_permission_context(self, mock_retrieve):
+        response = mcp_search_documents({"query": "policy"})
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "permission_context_missing")
+        self.assertFalse(response["error"]["retryable"])
+        mock_retrieve.assert_not_called()
