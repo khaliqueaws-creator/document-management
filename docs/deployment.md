@@ -21,20 +21,16 @@ flowchart TB
             DB[PostgreSQL 16 Container\nport 5432]
         end
 
-        subgraph AI_Local[Deployment: ollama]
-            Ollama[Ollama Container\nport 11434]
-        end
-
         subgraph Search[Deployment: opensearch]
             OpenSearch[OpenSearch Container\nport 9200]
         end
 
         MCP[MCP Retrieval Boundary\ninside document-app]
+        MCPIndex[MCP Indexing Boundary\ninside document-app]
 
         Media[(Media PVC)]
         DBPVC[(PostgreSQL PVC)]
         SearchPVC[(OpenSearch PVC)]
-        ModelPVC[(Ollama Model PVC)]
 
         Config --> Init
         Secret --> Init
@@ -46,23 +42,23 @@ flowchart TB
         Web --> Media
         DB --> DBPVC
         Web --> MCP
+        Web --> MCPIndex
         MCP --> OpenSearch
         MCP --> DB
+        MCPIndex --> OpenSearch
+        MCPIndex --> DB
         OpenSearch --> SearchPVC
-        Ollama --> ModelPVC
-        Web --> Ollama
     end
 
-    subgraph AI_External[External AI Providers]
-        Gemini[Google Gemini API]
+    subgraph BedrockRuntime[AWS Bedrock]
         Bedrock[AWS Bedrock Nova Lite]
         Titan[AWS Bedrock Titan Embeddings V2]
     end
 
-    Web --> Gemini
     Web --> Bedrock
     Web --> Titan
-    Titan --> OpenSearch
+    Titan --> MCP
+    Titan --> MCPIndex
 ```
 
 ## Deployment Components
@@ -70,20 +66,18 @@ flowchart TB
 | Component | Purpose |
 | --- | --- |
 | ConfigMap | Stores non-secret runtime configuration. |
-| Secret | Stores database credentials, Okta secrets, Gemini API keys, AWS credentials, and sensitive values. |
+| Secret | Stores database credentials, Okta secrets, AWS credentials, and sensitive values. |
 | Init Container | Waits for the configured database and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
 | MCP Retrieval Boundary | Backend retrieval wrapper used by Ask Documents before Nova Lite answer generation. |
+| MCP Indexing Boundary | Backend indexing wrapper used by upload/reprocess and bulk import when `MCP_INDEXING_ENABLED=True`. |
 | PostgreSQL | Active persistent relational database service. |
 | OpenSearch | Derived document/chunk retrieval index for keyword and vector search. |
-| ollama | Optional local AI inference service. |
-| Gemini API | Optional external AI metadata provider. |
-| AWS Bedrock Nova Lite | Optional external AI metadata provider through boto3. |
-| AWS Bedrock Titan Embeddings V2 | Optional embedding provider for semantic AI search. |
+| AWS Bedrock Nova Lite | AI metadata provider and Ask Documents answer generator through boto3. |
+| AWS Bedrock Titan Embeddings V2 | Embedding provider for document chunks, AI Search, and Ask Documents retrieval. |
 | Media PVC | Persistent storage for uploaded files. |
 | PostgreSQL PVC | Active persistent database storage. |
 | OpenSearch PVC | Persistent OpenSearch index storage. |
-| Ollama Model PVC | Persistent AI model storage. |
 
 ## Deployment Flow
 
@@ -93,8 +87,6 @@ sequenceDiagram
     participant OpenShift
     participant PostgreSQL
     participant Django
-    participant Ollama
-    participant Gemini
     participant Bedrock
 
     Admin->>OpenShift: Apply ConfigMap and Secrets
@@ -113,17 +105,13 @@ sequenceDiagram
     Django->>PostgreSQL: Run migrations
     OpenShift->>Django: Start Gunicorn container
 
-    Admin->>OpenShift: Apply ollama deployment
-    OpenShift->>Ollama: Start Ollama pod
-
-    Django->>Gemini: Optional external metadata generation
-    Django->>Bedrock: Optional external metadata generation
+    Django->>Bedrock: Metadata, embeddings, and answer generation
 ```
 
-## AWS Bedrock Phase 3 Configuration
+## AWS Bedrock And MCP Configuration
 
-Bedrock Phase 3 adds AWS-managed metadata generation and embeddings. Configure
-non-secret settings in the OpenShift ConfigMap or EC2 environment:
+Configure non-secret Bedrock and MCP settings in the OpenShift ConfigMap or EC2
+environment:
 
 | Variable | Example | Purpose |
 | --- | --- | --- |
@@ -140,7 +128,7 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 | AI_RAG_MIN_RETRIEVAL_SCORE | 0 | Optional OpenSearch score floor for retrieved RAG chunks. |
 | MCP_RETRIEVAL_ENABLED | True | Routes Ask Documents retrieval through the MCP boundary. |
 | MCP_RETRIEVAL_FALLBACK_ENABLED | False | Disables direct retrieval fallback during MCP validation so failures are visible. |
-| MCP_INDEXING_ENABLED | False | Routes upload/reprocess indexing through the MCP indexing boundary when enabled. |
+| MCP_INDEXING_ENABLED | True | Routes upload/reprocess and bulk import indexing through the MCP indexing boundary. |
 
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,
@@ -240,11 +228,12 @@ flowchart LR
     PostgreSQL[(PostgreSQL Pod)] --> DBPVC[(postgresql-pvc)]
     OpenSearch[(OpenSearch Pod)] --> SearchPVC[(opensearch-pvc)]
     Django[Django Pod] --> MediaPVC[(docmanager-media-pvc)]
-    Ollama[Ollama Pod] --> ModelPVC[(ollama-models-pvc)]
     Django --> MCP[MCP Retrieval Boundary]
+    Django --> MCPIndex[MCP Indexing Boundary]
     MCP --> OpenSearch
     MCP --> PostgreSQL
-    Django --> Gemini[Google Gemini API]
+    MCPIndex --> OpenSearch
+    MCPIndex --> PostgreSQL
     Django --> Bedrock[AWS Bedrock Nova Lite]
 ```
 
@@ -253,28 +242,27 @@ flowchart LR
 - Do not delete PVCs unless intentionally resetting data.
 - Restart the Django deployment after ConfigMap changes.
 - Rebuild the image after Python or template updates.
-- Recreate the Ollama model pull job after changing the configured model.
 - Use OpenShift rollout status commands to validate deployments.
 - Cloudflare Tunnel exposes the internal OpenShift route externally for demo access.
 
-## Planned MCP Indexing Rollout
+## MCP Indexing Rollout
 
 The MCP indexing contract is documented in
 [`mcp-indexing-contract.md`](mcp-indexing-contract.md). The application now has
-an in-process MCP indexing wrapper and a feature flag for browser-path rollout.
+an in-process MCP indexing wrapper and a feature flag for browser and bulk
+import rollout.
 
 Roll out in this order:
 
-1. Keep `MCP_INDEXING_ENABLED=False` for normal direct indexing behavior.
-2. Build and deploy an image that includes `documents.mcp_indexing`.
-3. Set `MCP_INDEXING_ENABLED=True` in the ConfigMap for browser-path validation.
-4. Upload or reprocess one known document and confirm logs include
+1. Build and deploy an image that includes `documents.mcp_indexing`.
+2. Set `MCP_INDEXING_ENABLED=True` in the ConfigMap.
+3. Upload or reprocess one known document and confirm logs include
    `mcp_indexing status=ok`.
-5. For a clean-room test, bulk import a known folder with
+4. For a clean-room test, bulk import a known folder with
    `bulk_import_documents --rebuild-embeddings --reindex-opensearch`; with
    `MCP_INDEXING_ENABLED=True`, the command uses the MCP indexing boundary.
-6. Validate Search, AI Search, and Ask Documents against those documents.
-7. Keep the existing direct rebuild and reindex commands available as rollback
+5. Validate Search, AI Search, and Ask Documents against those documents.
+6. Keep the existing direct rebuild and reindex commands available as rollback
    tools until MCP indexing has parity.
 
 ## Initial Bulk Upload Validation

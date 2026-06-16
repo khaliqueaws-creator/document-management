@@ -29,17 +29,17 @@ flowchart LR
     OpenShift --> Django[Django + Gunicorn]
 
     Django --> PostgreSQL[(PostgreSQL)]
-    Django --> MCP[MCP Retrieval Boundary]
-    MCP --> OpenSearch[(OpenSearch)]
-    MCP --> PostgreSQL
+    Django --> RetrievalMCP[MCP Retrieval Boundary]
+    Django --> IndexingMCP[MCP Indexing Boundary]
+    RetrievalMCP --> OpenSearch[(OpenSearch)]
+    RetrievalMCP --> PostgreSQL
+    IndexingMCP --> OpenSearch
+    IndexingMCP --> PostgreSQL
     Django --> Storage[(Media PVC)]
 
     Django --> OCR[Tesseract OCR]
 
-    Django --> AI{AI Provider}
-    AI --> Ollama[Ollama]
-    AI --> Gemini[Gemini]
-    AI --> Bedrock[AWS Bedrock Nova Lite]
+    Django --> Bedrock[AWS Bedrock Nova Lite]
 
     Django --> Embeddings[AWS Bedrock Titan Embeddings]
     Embeddings --> Chunks[(PostgreSQL DocumentChunk JSON embeddings)]
@@ -71,10 +71,11 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - View audit events through an admin-only audit page.
 - Authenticate users through Okta OIDC.
 - Authorize access through Okta group-based application roles.
-- Generate AI metadata suggestions through Ollama, Gemini, or AWS Bedrock Nova Lite.
+- Generate AI metadata suggestions through AWS Bedrock Nova Lite.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
+- Index upload/reprocess and bulk-import documents through the MCP indexing boundary when enabled.
 - Rebuild embeddings in batch with a Django management command.
 - Search documents by meaning through the AI Search page.
 - Ask document questions with MCP-backed retrieved chunk citations through the Ask Documents page.
@@ -94,13 +95,14 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | Document parsing | pypdf, python-docx, openpyxl |
 | Authentication | Okta OIDC through Authlib |
 | Authorization | Okta groups stored in Django session |
-| AI metadata | Switchable Ollama, Gemini, or AWS Bedrock provider |
+| AI metadata | AWS Bedrock Nova Lite |
 | AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
 | Search index | OpenSearch document and chunk indexes |
 | Semantic search | AWS Bedrock query embeddings with OpenSearch k-NN retrieval |
+| MCP indexing | Backend indexing boundary for upload/reprocess and bulk import |
 | RAG Q&A | MCP retrieval boundary over OpenSearch chunks with AWS Bedrock Nova Lite answer generation |
 | Container platform | OpenShift CRC |
-| Container image | Docker Hub image `docker.io/khalique/document-app:1.9-mcp-observability` |
+| Container image | Docker Hub image `docker.io/khalique/document-app:2.2-mcp-indexing-bulk` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -116,16 +118,15 @@ Browser
 Django
   -> document media PVC
   -> OpenSearch Service and OpenSearch PVC
+  -> MCP indexing boundary for upload/reprocess and bulk import
   -> MCP retrieval boundary for Ask Documents
-  -> Ollama Service and Ollama model PVC
-  -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
   -> AWS Bedrock Titan Embeddings over HTTPS
   -> DocumentChunk rows in PostgreSQL
   -> OpenSearch document and chunk indexes
 ```
 
-The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval uses OpenSearch, and Ask Documents now routes retrieval through the backend MCP boundary before Nova Lite answer generation. PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. Ollama remains available as a local/private metadata provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval uses OpenSearch, and Ask Documents routes retrieval through the backend MCP boundary before Nova Lite answer generation. PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. AWS Bedrock Nova Lite is used for AI metadata suggestions and RAG answers. AWS Bedrock Titan Text Embeddings V2 is used for document and query embeddings.
 
 ## Database Backend
 
@@ -152,56 +153,18 @@ oc rollout status deployment/document-app
 oc exec deployment/document-app -- python manage.py migrate
 ```
 
-## Switching AI Metadata Providers
+## AWS Bedrock Configuration
 
-The active AI metadata provider is controlled by `AI_METADATA_PROVIDER`. Supported values are:
+The current implementation uses AWS Bedrock for AI metadata, embeddings, and
+RAG answer generation.
 
-```text
-ollama
-gemini
-bedrock
-```
-
-For PowerShell, use `oc set env` on the deployment. This is the quickest live switch and avoids JSON patch quoting issues.
-
-Check the current provider in OpenShift:
+Check the current Bedrock settings in OpenShift:
 
 ```powershell
 oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
-```
-
-Switch to Ollama:
-
-```powershell
-oc set env deployment/document-app AI_METADATA_PROVIDER=ollama
-```
-
-Switch to Gemini:
-
-```powershell
-oc set env deployment/document-app AI_METADATA_PROVIDER=gemini
-```
-
-Gemini also requires `GEMINI_API_KEY` in `secret/docmanager-secrets`.
-
-Switch to AWS Bedrock Nova Lite:
-
-```powershell
-oc set env deployment/document-app AI_METADATA_PROVIDER=bedrock
-```
-
-Set model-specific values only when changing them from the configured defaults:
-
-```powershell
-oc set env deployment/document-app `
-  OLLAMA_BASE_URL=http://ollama:11434 `
-  OLLAMA_MODEL=qwen2.5:0.5b `
-  GEMINI_MODEL=gemini-2.5-flash `
-  AWS_REGION=us-east-1 `
-  BEDROCK_NOVA_MODEL_ID=amazon.nova-lite-v1:0 `
-  BEDROCK_EMBED_MODEL_ID=amazon.titan-embed-text-v2:0 `
-  AI_EMBEDDING_MAX_CHARS=2500 `
-  AI_SEARCH_TOP_K=5
+oc exec deployment/document-app -- printenv AWS_REGION
+oc exec deployment/document-app -- printenv BEDROCK_NOVA_MODEL_ID
+oc exec deployment/document-app -- printenv BEDROCK_EMBED_MODEL_ID
 ```
 
 Bedrock uses boto3's normal credential chain. In OpenShift, provide AWS credentials through `secret/docmanager-secrets` or another injected credential mechanism:
@@ -212,14 +175,13 @@ AWS_SECRET_ACCESS_KEY
 AWS_SESSION_TOKEN  # only for temporary credentials
 ```
 
-After switching providers, wait for the rollout and verify Django starts:
+Validate Bedrock embeddings from the running app:
 
 ```powershell
-oc rollout status deployment/document-app
-oc exec deployment/document-app -- python manage.py check
+oc exec deployment/document-app -- python manage.py shell -c "from documents.embeddings import get_titan_embedding; print(len(get_titan_embedding('hello world')))"
 ```
 
-Then regenerate AI metadata on a document from the edit metadata page. The AI Suggested Metadata panel shows which provider produced the suggestion.
+Expected output is `1024`.
 
 ## AI Embeddings and Semantic Search
 
@@ -265,14 +227,15 @@ construction, and citation handling, see
 [`docs/rag-question-answering.md`](docs/rag-question-answering.md).
 For the active MCP boundary around the same retrieval path, see
 [`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
-For the planned MCP boundary around chunking, embedding, and indexing, see
+For the active MCP boundary around chunking, embedding, and indexing, see
 [`docs/mcp-indexing-contract.md`](docs/mcp-indexing-contract.md).
 
 ## MCP Retrieval Validation
 
-The OpenShift MCP runtime uses `docker.io/khalique/document-app:1.9-mcp-observability` with
-`MCP_RETRIEVAL_ENABLED=True`. During validation, fallback is disabled so MCP
-retrieval failures are visible instead of silently using the direct path.
+The OpenShift MCP runtime uses `docker.io/khalique/document-app:2.2-mcp-indexing-bulk`
+with `MCP_RETRIEVAL_ENABLED=True` and `MCP_INDEXING_ENABLED=True`. During
+validation, retrieval fallback is disabled so MCP retrieval failures are visible
+instead of silently using the direct path.
 
 Verify the running image and flags:
 

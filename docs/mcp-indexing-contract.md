@@ -1,22 +1,25 @@
 # MCP Document Indexing Contract
 
-This document defines the planned MCP tool contract for document ingestion,
+This document defines the MCP tool contract for document ingestion,
 chunking, embedding, and OpenSearch indexing. It is the write-time companion to
 the existing [MCP Document Retrieval Contract](mcp-retrieval-contract.md).
 
-The current application already supports this direct pipeline:
+The current application supports this MCP-backed pipeline when
+`MCP_INDEXING_ENABLED=True`:
 
 ```text
 document upload/import
   -> text extraction/OCR
+  -> MCP index_document
   -> paragraph-aware chunking
   -> AWS Bedrock Titan embeddings
   -> PostgreSQL DocumentChunk rows
   -> OpenSearch document and chunk indexes
 ```
 
-The MCP indexing path should wrap that same behavior behind a stable backend
-tool boundary without changing the first user-facing upload workflow.
+The MCP indexing path wraps the chunking, embedding, and indexing behavior
+behind a stable backend tool boundary. Browser upload/reprocess flows and bulk
+imports can use this path while PostgreSQL remains the source of truth.
 
 ## Design Goals
 
@@ -39,8 +42,8 @@ tool boundary without changing the first user-facing upload workflow.
 | Tool name | `index_document` |
 | Version | `1.0` |
 | Purpose | Chunk, embed, and index one canonical document |
-| Caller | Django backend service or future indexing worker |
-| User-facing change | None for Phase 1 and first implementation |
+| Caller | Django backend service and bulk import command |
+| User-facing change | None; upload/import behavior is preserved behind the flag |
 | Canonical document source | PostgreSQL `Document` |
 | Chunk storage | PostgreSQL `DocumentChunk` |
 | Retrieval index | OpenSearch document and chunk indexes |
@@ -50,10 +53,10 @@ tool boundary without changing the first user-facing upload workflow.
 ## Request Contract
 
 The backend calls `index_document` after a document has a canonical
-`Document.id` and extracted text. The first implementation may hydrate the
-document by `document_id` and ignore duplicated metadata fields, but the request
-contract includes them so a future out-of-process MCP service has enough
-context to validate intent and trace work.
+`Document.id` and extracted text. The in-process implementation hydrates the
+document by `document_id` and treats PostgreSQL as authoritative. The request
+contract also includes optional metadata fields so a future out-of-process MCP
+service has enough context to validate intent and trace work.
 
 ```json
 {
@@ -98,7 +101,7 @@ context to validate intent and trace work.
 | `document.document_id` | Yes | Canonical PostgreSQL `Document.id`. |
 | `document.content_version` | No | Stable content hash or version id used for idempotency and stale-work checks. |
 | `document.file_name` | No | File name used for operator diagnostics. PostgreSQL remains authoritative. |
-| `document.extracted_text` | No for in-process, yes for out-of-process | Extracted text to chunk. The first in-process implementation may hydrate this from PostgreSQL. |
+| `document.extracted_text` | No for in-process, yes for out-of-process | Extracted text to chunk. The in-process implementation hydrates this from PostgreSQL. |
 | `document.metadata` | No | Metadata snapshot for indexing and trace validation. PostgreSQL remains authoritative. |
 | `options` | No | Indexing controls. Defaults should match current Django settings and existing behavior. |
 | `trace` | No | Non-sensitive request metadata for logs and rollout diagnostics. |
@@ -212,7 +215,7 @@ AWS credentials, Okta tokens, file contents, or secrets.
 
 ## Idempotency Rules
 
-The first implementation should be safe to retry from upload, bulk import,
+The implementation should be safe to retry from upload, bulk import,
 manual reprocessing, or a future background worker.
 
 1. The preferred idempotency key is `(document_id, content_version,
@@ -235,7 +238,7 @@ The MCP indexing boundary must follow these rules:
 
 1. PostgreSQL remains the authority for whether a document exists and may be
    indexed.
-2. The first backend-only implementation may trust Django service calls. A
+2. The backend-only implementation may trust Django service calls. A
    future exposed MCP service must require explicit service authentication.
 3. User-facing roles do not directly call this tool from the frontend.
 4. Logs may include document id, counts, timings, error codes, indexes, model
@@ -246,8 +249,8 @@ The MCP indexing boundary must follow these rules:
 
 ## Backend Compatibility
 
-The first implementation should wrap existing code rather than creating a new
-indexing stack:
+The implementation wraps existing code rather than creating a new indexing
+stack:
 
 | Existing Behavior | MCP Indexing Responsibility |
 | --- | --- |
@@ -255,31 +258,21 @@ indexing stack:
 | `documents.embeddings.rebuild_document_embeddings()` | Reuse or split into smaller functions for chunk creation and embedding. |
 | `documents.opensearch_indexing.reindex_document()` | Reuse for document and chunk index writes. |
 | `bulk_import_documents --rebuild-embeddings --reindex-opensearch` | Calls the MCP wrapper when `MCP_INDEXING_ENABLED=True`; keeps the direct path when disabled. |
-| Upload-time embedding/indexing hooks | May call the MCP wrapper after validation, but must not change the user upload flow first. |
+| Upload-time embedding/indexing hooks | Call the MCP wrapper when `MCP_INDEXING_ENABLED=True`; keep the direct path when disabled. |
 
-## Rollout Plan
+## Rollout And Validation
 
-Phase 1 is this contract and documentation. No runtime behavior changes.
+The implementation is available in `documents.mcp_indexing`.
 
-Phase 2 should add an in-process wrapper such as `documents.mcp_indexing` with
-tests for successful indexing, empty extracted text, embedding failures,
-OpenSearch failures, dry runs, and idempotent replay.
-
-Phase 3 can route one operator-only management command through the wrapper, for
-example a new `health_mcp_indexing` or a document-id-specific smoke command.
-
-Phase 4 can optionally route upload/import/reprocessing paths through the MCP
-wrapper behind a feature flag after parity is validated.
-
-## Validation Plan For Phase 2
-
-- Unit test request validation and error mapping.
-- Unit test dry-run behavior with no database or OpenSearch writes.
-- Unit test successful indexing counts and response shape.
-- Unit test embedding provider errors and OpenSearch indexing errors.
-- Compare direct `rebuild_embeddings` plus `reindex_opensearch` output with
-  MCP indexing output for the same document.
-- Validate from OpenShift with one known document id before using bulk imports.
+- Browser upload/reprocess calls the wrapper when `MCP_INDEXING_ENABLED=True`.
+- `bulk_import_documents --rebuild-embeddings --reindex-opensearch` calls the
+  wrapper when `MCP_INDEXING_ENABLED=True`.
+- Logs include `mcp_indexing status=ok` or a structured error code.
+- Unit tests cover request validation, dry runs, successful indexing,
+  metadata-only reindexing, embedding failures, OpenSearch failures, browser
+  integration, and bulk import integration.
+- OpenShift validation should confirm `chunks_created`,
+  `chunk_records_indexed`, Search, AI Search, Ask Documents, and citation links.
 
 ## Open Questions
 

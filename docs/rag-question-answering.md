@@ -42,6 +42,8 @@ The current RAG implementation uses MCP-backed retrieval plus AWS Bedrock:
 The active MCP retrieval boundary is documented separately in
 [`mcp-retrieval-contract.md`](mcp-retrieval-contract.md). That contract wraps
 the retrieval step only; answer generation remains in the Django backend.
+The write-time indexing boundary that creates the chunk index is documented in
+[`mcp-indexing-contract.md`](mcp-indexing-contract.md).
 
 ## End-To-End Call Flow
 
@@ -80,12 +82,13 @@ Nova Lite = natural-language answer generation
 
 ## Retrieval Flow
 
-Uploaded documents already have extracted text. During embedding rebuild or
-upload processing, the text is split into paragraph-aware chunks and each chunk
-is embedded with Titan.
+Uploaded documents already have extracted text. During MCP indexing, upload
+processing, or bulk import, the text is split into paragraph-aware chunks and
+each chunk is embedded with Titan.
 
 Those chunk records are stored in PostgreSQL as `DocumentChunk` rows and indexed
-into OpenSearch with a `knn_vector` field.
+into OpenSearch with a `knn_vector` field. PostgreSQL remains the rebuild/debug
+source; OpenSearch is the derived retrieval index.
 
 When a user asks a question:
 

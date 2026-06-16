@@ -11,6 +11,8 @@ without changing the Django UI or the `/ask/` response shape.
 - Reuse the current Bedrock Titan embedding and OpenSearch chunk retrieval path.
 - Keep PostgreSQL `Document` records as the final authority for metadata,
   lifecycle state, file links, and user-visible citations.
+- Treat OpenSearch as a derived index populated from PostgreSQL through the MCP
+  indexing boundary when `MCP_INDEXING_ENABLED=True`.
 - Return retrieved context only after permission trimming has been applied.
 - Keep answer generation outside this MCP tool. The tool retrieves grounded
   context; the backend still builds prompts and calls the generation provider.

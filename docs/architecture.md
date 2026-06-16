@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. Ask Documents retrieval runs through the backend MCP retrieval boundary defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md). A separate planned MCP indexing boundary is defined in [MCP Document Indexing Contract](mcp-indexing-contract.md).
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document metadata and audit state, OpenSearch for derived keyword/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and AWS Bedrock for AI metadata, embeddings, and answer generation. Ask Documents retrieval runs through the backend MCP retrieval boundary defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md). Upload, reprocess, and bulk import indexing can run through the MCP indexing boundary defined in [MCP Document Indexing Contract](mcp-indexing-contract.md).
 
 ## Current OpenShift CRC Architecture
 
@@ -18,22 +18,19 @@ flowchart TB
     PostgreSQLSvc --> PostgreSQL[(PostgreSQL Pod)]
     PostgreSQL --> PostgreSQLPVC[(postgresql-pvc)]
 
-    App --> MCP[MCP Retrieval Boundary]
-    MCP --> OpenSearchSvc[OpenSearch Service]
-    MCP --> PostgreSQLSvc
+    App --> RetrievalMCP[MCP Retrieval Boundary]
+    App --> IndexingMCP[MCP Indexing Boundary]
+    RetrievalMCP --> OpenSearchSvc[OpenSearch Service]
+    RetrievalMCP --> PostgreSQLSvc
+    IndexingMCP --> OpenSearchSvc
+    IndexingMCP --> PostgreSQLSvc
     OpenSearchSvc --> OpenSearch[(OpenSearch Pod)]
     OpenSearch --> OpenSearchPVC[(opensearch-pvc)]
 
     App --> MediaPVC[(docmanager-media-pvc)]
     App --> Tesseract[Tesseract OCR]
 
-    App --> AIChoice{AI Metadata Provider}
-    AIChoice --> OllamaSvc[Ollama Service]
-    AIChoice --> Gemini[Gemini API]
-    AIChoice --> Bedrock[AWS Bedrock Nova Lite]
-    OllamaSvc --> Ollama[Ollama Pod]
-    Ollama --> OllamaPVC[(ollama-models-pvc)]
-
+    App --> Bedrock[AWS Bedrock Nova Lite]
     App --> Titan[AWS Bedrock Titan Embeddings]
     Titan --> OpenSearchSvc
     App --> RAGAnswer[AWS Bedrock Nova Lite RAG Answers]
@@ -49,18 +46,15 @@ flowchart TB
 | document-app Service | Exposes the Django application pod inside OpenShift. |
 | Django + Gunicorn | Hosts the application logic, templates, search, document Q&A, upload, OCR orchestration, AI metadata flow, and role-based access. |
 | MCP Retrieval Boundary | Wraps Ask Documents retrieval, applies request validation, permission context handling, PostgreSQL hydration, and structured retrieval errors. |
-| MCP Indexing Boundary | Planned write-time boundary for chunking, embedding, and OpenSearch indexing while preserving PostgreSQL as the source of truth. |
+| MCP Indexing Boundary | Write-time boundary for chunking, Bedrock Titan embedding, PostgreSQL `DocumentChunk` persistence, and OpenSearch indexing. |
 | PostgreSQL Service / Pod | Stores canonical document metadata, extracted text, sessions, audit events, AI suggestion status, and chunk rebuild/debug data. |
 | postgresql-pvc | Persists PostgreSQL database files. |
 | OpenSearch Service / Pod | Stores derived document and chunk search records for keyword, vector, and RAG retrieval. |
 | opensearch-pvc | Persists OpenSearch index data. |
 | docmanager-media-pvc | Persists uploaded document files. |
 | Tesseract OCR | Extracts text from image files and scanned documents. |
-| Gemini API | External AI metadata provider for higher-quality suggestions. |
-| AWS Bedrock Nova Lite | External AI metadata provider and RAG answer generator accessed through boto3 and AWS credentials. |
+| AWS Bedrock Nova Lite | AI metadata provider and RAG answer generator accessed through boto3 and AWS credentials. |
 | AWS Bedrock Titan Embeddings V2 | External embedding provider for document chunks and AI Search queries. |
-| Ollama Service / Pod | Local AI metadata provider for private/offline model execution. |
-| ollama-models-pvc | Persists downloaded Ollama models. |
 | Okta OIDC | Handles authentication and provides group claims for application roles. |
 
 ## Role-Based Access Architecture
@@ -90,28 +84,25 @@ flowchart TB
     DB --> Audit[Audit Events]
     DB --> SessionData[Session Data]
 
-    App --> MCP[MCP Retrieval Boundary]
-    MCP --> Search[(OpenSearch)]
-    MCP --> DB
+    App --> RetrievalMCP[MCP Retrieval Boundary]
+    App --> IndexingMCP[MCP Indexing Boundary]
+    RetrievalMCP --> Search[(OpenSearch)]
+    RetrievalMCP --> DB
+    IndexingMCP --> Search
+    IndexingMCP --> DB
     Search --> SearchDocs[Derived Document Index]
     Search --> SearchChunks[Derived Chunk Vector Index]
 
     App --> MediaPVC[(Media PVC)]
     MediaPVC --> Files[Uploaded Documents]
 
-    App --> ModelPVC[(Ollama Model PVC)]
-    ModelPVC --> Models[Local AI Models]
-
-    App --> AIProviderConfig[AI Provider Configuration]
-    AIProviderConfig --> Ollama[Ollama]
-    AIProviderConfig --> Gemini[Gemini]
-    AIProviderConfig --> Bedrock[AWS Bedrock Nova Lite]
+    App --> Bedrock[AWS Bedrock Nova Lite]
 
     App --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Chunks
     Titan --> SearchChunks
-    SearchChunks --> MCP
-    MCP --> RAGAnswer[AWS Bedrock Nova Lite RAG Answer]
+    SearchChunks --> RetrievalMCP
+    RetrievalMCP --> RAGAnswer[AWS Bedrock Nova Lite RAG Answer]
 ```
 
 ## Design Notes
@@ -122,12 +113,11 @@ flowchart TB
 - OpenSearch records are derived from PostgreSQL data and can be rebuilt with `python manage.py reindex_opensearch --create-indexes`.
 - OpenSearch search hits are treated as candidate retrieval results only. Django hydrates final search results from PostgreSQL before rendering them to users.
 - Ask Documents uses the MCP retrieval boundary for structured retrieval responses and error handling before prompt construction.
-- The planned MCP indexing boundary is intentionally separate from retrieval so write-time chunking, embedding, and OpenSearch indexing can evolve without changing the stable Ask Documents path.
+- Upload, scanned-document confirmation, metadata reindexing, and bulk import can use the MCP indexing boundary for write-time chunking, embedding, and OpenSearch indexing.
 - Deleted or missing PostgreSQL documents are not shown even if stale OpenSearch records still exist.
 - AI suggestions are staged separately from official metadata until accepted by a Loader or Admin user.
-- Gemini is useful when external API processing is acceptable.
-- AWS Bedrock Nova Lite is useful when AWS-managed model access is preferred and generates grounded Ask Documents answers after retrieval.
-- Ollama is useful when local/private processing is preferred.
+- AWS Bedrock Nova Lite generates AI metadata suggestions and grounded Ask Documents answers after MCP retrieval.
+- AWS Bedrock Titan Text Embeddings V2 creates document and query vectors used by OpenSearch retrieval.
 - The application is intentionally structured to support future enhancements such as hybrid retrieval, background jobs, document versioning, and workflow approvals.
 
 ## Source Of Truth Boundary

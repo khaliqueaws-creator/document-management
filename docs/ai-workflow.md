@@ -1,8 +1,8 @@
-# AI Metadata Workflow
+# AI And MCP Workflow
 
-This document describes the OCR and AI-assisted metadata workflow used by the Intelligent Document Management Platform.
+This document describes the OCR, AI-assisted metadata, MCP indexing, semantic search, and RAG workflow used by the Intelligent Document Management Platform.
 
-The platform combines OCR, document parsing, and AI-assisted metadata generation to help users organize and classify uploaded documents.
+The current validated implementation uses AWS Bedrock for AI metadata, embeddings, and answer generation. PostgreSQL stores canonical document metadata and chunk records, while OpenSearch stores derived document and vector indexes used by search, AI Search, and Ask Documents.
 
 ## AI Metadata Processing Flow
 
@@ -12,7 +12,8 @@ sequenceDiagram
     participant Django
     participant Media as Media PVC
     participant OCR as Text Extraction / OCR
-    participant AI as AI Provider
+    participant MCPIndex as MCP Indexing
+    participant AI as AWS Bedrock Nova Lite
     participant Embeddings as Bedrock Titan Embeddings
     participant DB as PostgreSQL
     participant Search as OpenSearch
@@ -21,9 +22,11 @@ sequenceDiagram
     Django->>Media: Save uploaded file
     Django->>OCR: Extract text / OCR if needed
     OCR-->>Django: Extracted text
-    Django->>Embeddings: Generate chunk embeddings when text is valid
+    Django->>MCPIndex: index_document
+    MCPIndex->>Embeddings: Generate chunk embeddings when text is valid
     Embeddings-->>Django: Embedding vectors
-    Django->>Search: Index document/chunk search records
+    MCPIndex->>DB: Save DocumentChunk rows
+    MCPIndex->>Search: Index document/chunk search records
     Django->>AI: Send text for metadata suggestion
     AI-->>Django: Suggested type, department, tags, summary
     Django->>DB: Save metadata, extracted text, chunks, AI suggestion, audit event
@@ -64,20 +67,12 @@ flowchart TB
     OCRIMG --> Extracted
 ```
 
-## AI Provider Selection
+## Bedrock Metadata Provider
 
 ```mermaid
 flowchart LR
-    ExtractedText[Extracted Text] --> Provider{AI_METADATA_PROVIDER}
-
-    Provider -->|gemini| Gemini[Google Gemini API]
-    Provider -->|ollama| Ollama[Local Ollama Service]
-    Provider -->|bedrock| Bedrock[AWS Bedrock Nova Lite]
-
-    Gemini --> Suggestions[AI Suggestions]
-    Ollama --> Suggestions
+    ExtractedText[Extracted Text] --> Bedrock[AWS Bedrock Nova Lite]
     Bedrock --> Suggestions
-
     Suggestions --> Review[Human Review Workflow]
 ```
 
@@ -122,22 +117,15 @@ Benefits:
 - Keeps users in control.
 - Improves metadata quality.
 - Supports auditability.
-- Allows safe experimentation with local and external AI providers.
+- Allows safe review of Bedrock-generated suggestions before metadata becomes official.
 
-## AI Provider Options
+## AWS Bedrock Runtime
 
-| Provider | Advantage | Tradeoff |
-| --- | --- | --- |
-| Gemini | Better metadata quality and reasoning | Sends data externally |
-| AWS Bedrock Nova Lite | AWS-managed model access through boto3 | Requires AWS credentials, permissions, and model access |
-| Ollama | Local/private inference | Limited by local CPU and memory |
-
-## AWS Bedrock Phase 3
-
-Bedrock Phase 3 supports two AI capabilities:
+Bedrock supports three AI capabilities in the current deployment:
 
 - Metadata suggestions through AWS Bedrock Nova Lite.
-- Semantic search embeddings through AWS Bedrock Titan Text Embeddings V2.
+- Document and query embeddings through AWS Bedrock Titan Text Embeddings V2.
+- Ask Documents answer generation through AWS Bedrock Nova Lite after MCP retrieval.
 
 Required environment variables:
 
@@ -220,11 +208,11 @@ current request's accessible PostgreSQL `Document` queryset before they are
 included in the prompt. Empty or low-context retrieval returns a clear
 no-context answer instead of asking the model to guess.
 
-## Planned MCP Indexing Boundary
+## MCP Indexing Boundary
 
-The next MCP expansion is write-time indexing. It is documented in
+Write-time indexing is documented in
 [`mcp-indexing-contract.md`](mcp-indexing-contract.md) and is intentionally
-separate from the working retrieval path.
+separate from the retrieval path.
 
 ```text
 document text
@@ -235,19 +223,18 @@ document text
   -> OpenSearch document and chunk records
 ```
 
-Phase 1 only defines the contract. The current upload, bulk import,
-`rebuild_embeddings`, and `reindex_opensearch` flows stay unchanged until an
-in-process MCP indexing wrapper is implemented and validated.
+When `MCP_INDEXING_ENABLED=True`, browser upload/reprocess flows and
+`bulk_import_documents --rebuild-embeddings --reindex-opensearch` call the
+in-process MCP indexing wrapper. The wrapper reuses the current paragraph-aware
+chunking, Bedrock Titan embedding, PostgreSQL `DocumentChunk`, and OpenSearch
+indexing behavior.
 
 ## Current AI Design Decisions
 
-- Gemini is preferred when external API usage is acceptable.
-- AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
+- AWS Bedrock Nova Lite is the active AI metadata and answer-generation provider.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
 - RAG document Q&A uses the MCP retrieval boundary, retrieves OpenSearch chunks, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
-- MCP indexing is planned as a separate write-time boundary; it should reuse the existing chunking, embedding, and OpenSearch indexing behavior before changing runtime upload/import flows.
-- Ollama provides a local/private fallback.
-- qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
+- MCP indexing is the write-time boundary for upload/reprocess and bulk-import indexing when enabled.
 - AI suggestions are generated during upload when extracted text is available.
 - AI suggestions remain separate from official metadata until accepted.
 - Embedding failures do not block document upload or metadata suggestions.
