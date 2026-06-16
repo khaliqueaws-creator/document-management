@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. Ask Documents retrieval runs through the backend MCP retrieval boundary defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md).
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. Ask Documents retrieval runs through the backend MCP retrieval boundary defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md). A separate planned MCP indexing boundary is defined in [MCP Document Indexing Contract](mcp-indexing-contract.md).
 
 ## Current OpenShift CRC Architecture
 
@@ -49,6 +49,7 @@ flowchart TB
 | document-app Service | Exposes the Django application pod inside OpenShift. |
 | Django + Gunicorn | Hosts the application logic, templates, search, document Q&A, upload, OCR orchestration, AI metadata flow, and role-based access. |
 | MCP Retrieval Boundary | Wraps Ask Documents retrieval, applies request validation, permission context handling, PostgreSQL hydration, and structured retrieval errors. |
+| MCP Indexing Boundary | Planned write-time boundary for chunking, embedding, and OpenSearch indexing while preserving PostgreSQL as the source of truth. |
 | PostgreSQL Service / Pod | Stores canonical document metadata, extracted text, sessions, audit events, AI suggestion status, and chunk rebuild/debug data. |
 | postgresql-pvc | Persists PostgreSQL database files. |
 | OpenSearch Service / Pod | Stores derived document and chunk search records for keyword, vector, and RAG retrieval. |
@@ -121,6 +122,7 @@ flowchart TB
 - OpenSearch records are derived from PostgreSQL data and can be rebuilt with `python manage.py reindex_opensearch --create-indexes`.
 - OpenSearch search hits are treated as candidate retrieval results only. Django hydrates final search results from PostgreSQL before rendering them to users.
 - Ask Documents uses the MCP retrieval boundary for structured retrieval responses and error handling before prompt construction.
+- The planned MCP indexing boundary is intentionally separate from retrieval so write-time chunking, embedding, and OpenSearch indexing can evolve without changing the stable Ask Documents path.
 - Deleted or missing PostgreSQL documents are not shown even if stale OpenSearch records still exist.
 - AI suggestions are staged separately from official metadata until accepted by a Loader or Admin user.
 - Gemini is useful when external API processing is acceptable.

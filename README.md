@@ -18,6 +18,7 @@ Detailed architecture and operational documentation:
 - [Deployment Guide](docs/deployment.md)
 - [AI Workflow](docs/ai-workflow.md)
 - [MCP Document Retrieval Contract](docs/mcp-retrieval-contract.md)
+- [MCP Document Indexing Contract](docs/mcp-indexing-contract.md)
 
 ## High-Level Architecture Diagram
 
@@ -264,6 +265,8 @@ construction, and citation handling, see
 [`docs/rag-question-answering.md`](docs/rag-question-answering.md).
 For the active MCP boundary around the same retrieval path, see
 [`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
+For the planned MCP boundary around chunking, embedding, and indexing, see
+[`docs/mcp-indexing-contract.md`](docs/mcp-indexing-contract.md).
 
 ## MCP Retrieval Validation
 

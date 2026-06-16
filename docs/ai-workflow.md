@@ -220,12 +220,32 @@ current request's accessible PostgreSQL `Document` queryset before they are
 included in the prompt. Empty or low-context retrieval returns a clear
 no-context answer instead of asking the model to guess.
 
+## Planned MCP Indexing Boundary
+
+The next MCP expansion is write-time indexing. It is documented in
+[`mcp-indexing-contract.md`](mcp-indexing-contract.md) and is intentionally
+separate from the working retrieval path.
+
+```text
+document text
+  -> MCP index_document
+  -> paragraph-aware chunks
+  -> Bedrock Titan embeddings
+  -> PostgreSQL DocumentChunk rows
+  -> OpenSearch document and chunk records
+```
+
+Phase 1 only defines the contract. The current upload, bulk import,
+`rebuild_embeddings`, and `reindex_opensearch` flows stay unchanged until an
+in-process MCP indexing wrapper is implemented and validated.
+
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
 - RAG document Q&A uses the MCP retrieval boundary, retrieves OpenSearch chunks, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
+- MCP indexing is planned as a separate write-time boundary; it should reuse the existing chunking, embedding, and OpenSearch indexing behavior before changing runtime upload/import flows.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.
