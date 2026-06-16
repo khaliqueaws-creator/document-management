@@ -119,6 +119,94 @@ Benefits:
 - Supports auditability.
 - Allows safe review of Bedrock-generated suggestions before metadata becomes official.
 
+## Learner Flow Diagrams
+
+### Document Upload And MCP Indexing
+
+```text
+User Uploads Document
+     |
+     v
+Django Upload View
+     |
+     v
+Save File To Media PVC
+     |
+     v
+Extract Text / OCR
+     |
+     v
+Save Canonical Document Metadata In PostgreSQL
+     |
+     v
+MCP Indexing: index_document
+     |
+     +--> Split text into paragraph-aware chunks
+     |
+     +--> Bedrock Titan: embed each chunk
+     |
+     +--> PostgreSQL: save DocumentChunk rows
+     |
+     +--> OpenSearch: index document and chunk vectors
+     |
+     v
+Document Ready For Search, AI Search, And Ask
+```
+
+### Ask Documents / RAG
+
+```text
+User Question
+     |
+     v
+Django /ask/
+     |
+     v
+RAG Workflow
+     |
+     v
+MCP Retrieval
+     |
+     +--> Bedrock Titan: embed question
+     |
+     +--> OpenSearch: find similar chunks
+     |
+     +--> PostgreSQL: confirm source documents
+     |
+     v
+Retrieved Evidence + Citations
+     |
+     v
+RAG Prompt
+     |
+     v
+Bedrock Nova Lite
+     |
+     v
+Answer With Citations
+```
+
+### Semantic AI Search
+
+```text
+User Search Query
+     |
+     v
+Django /ai-search/
+     |
+     v
+Bedrock Titan: embed query
+     |
+     v
+OpenSearch: find similar indexed chunks
+     |
+     v
+PostgreSQL: hydrate matching documents
+     |
+     v
+Ranked Semantic Search Results
+```
+
 ## AWS Bedrock Runtime
 
 Bedrock supports three AI capabilities in the current deployment:

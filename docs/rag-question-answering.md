@@ -48,19 +48,34 @@ The write-time indexing boundary that creates the chunk index is documented in
 ## End-To-End Call Flow
 
 ```text
-User opens /ask/
-  -> Django routes to ask_documents()
-  -> answer_question(question)
-  -> retrieve_answer_context(question)
-  -> MCP search_documents payload
-  -> get_titan_embedding(question)
-  -> AWS Bedrock Titan returns a question vector
-  -> OpenSearch k-NN searches document chunk vectors
-  -> PostgreSQL hydrates matching Document records
-  -> MCP returns structured retrieval results
-  -> build_rag_prompt(question, retrieved chunks)
-  -> AWS Bedrock Nova Lite generates a grounded answer
-  -> ask_documents.html renders answer and citations
+User Question
+     |
+     v
+Django /ask/
+     |
+     v
+RAG Workflow
+     |
+     v
+MCP Retrieval
+     |
+     +--> Bedrock Titan: embed question
+     |
+     +--> OpenSearch: find similar chunks
+     |
+     +--> PostgreSQL: confirm source documents
+     |
+     v
+Retrieved Evidence + Citations
+     |
+     v
+RAG Prompt
+     |
+     v
+Bedrock Nova Lite
+     |
+     v
+Answer With Citations
 ```
 
 ## The Two Bedrock Model Roles

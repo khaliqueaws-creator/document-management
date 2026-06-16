@@ -225,6 +225,8 @@ Open the RAG document Q&A page:
 For a learning-focused walkthrough of the RAG call flow, model roles, prompt
 construction, and citation handling, see
 [`docs/rag-question-answering.md`](docs/rag-question-answering.md).
+For learner-friendly upload/indexing, Ask Documents, and semantic search flow
+diagrams, see [`docs/ai-workflow.md`](docs/ai-workflow.md).
 For the active MCP boundary around the same retrieval path, see
 [`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
 For the active MCP boundary around chunking, embedding, and indexing, see
