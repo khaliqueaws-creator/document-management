@@ -1,5 +1,8 @@
 import json
+import logging
 from io import BytesIO, StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
@@ -22,6 +25,8 @@ from .embeddings import (
     rebuild_document_embeddings,
 )
 from .mcp_retrieval import search_documents as mcp_search_documents
+from .mcp_indexing import index_document as mcp_index_document
+from .models import Document
 from .opensearch_indexing import (
     OpenSearchIndexingError,
     build_metadata_filter_query,
@@ -46,8 +51,28 @@ from .rag import (
     retrieve_question_context,
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
-from .views import try_rebuild_document_embeddings, try_reindex_document
+from .views import (
+    try_index_document_for_search,
+    try_rebuild_document_embeddings,
+    try_reindex_document,
+)
 from .views import accept_ai_metadata, reject_ai_metadata
+
+
+class LoggingSettingsTests(SimpleTestCase):
+    def test_mcp_loggers_emit_info_logs(self):
+        self.assertEqual(
+            logging.getLogger("documents.mcp_indexing").getEffectiveLevel(),
+            logging.INFO,
+        )
+        self.assertEqual(
+            logging.getLogger("documents.mcp_retrieval").getEffectiveLevel(),
+            logging.INFO,
+        )
+        self.assertEqual(
+            logging.getLogger("documents.rag").getEffectiveLevel(),
+            logging.INFO,
+        )
 
 
 class MetadataSuggestionTests(SimpleTestCase):
@@ -386,6 +411,53 @@ class UploadEmbeddingHookTests(SimpleTestCase):
         self.assertFalse(rebuilt)
         mock_rebuild.assert_not_called()
 
+    @override_settings(MCP_INDEXING_ENABLED=False)
+    @patch("documents.views.try_reindex_document")
+    @patch("documents.views.try_rebuild_document_embeddings")
+    def test_upload_search_index_uses_direct_path_by_default(
+        self,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        request = Mock()
+        document = Mock()
+        mock_rebuild.return_value = True
+        mock_reindex.return_value = True
+
+        indexed = try_index_document_for_search(request, document)
+
+        self.assertTrue(indexed)
+        mock_rebuild.assert_called_once_with(request, document)
+        mock_reindex.assert_called_once_with(request, document)
+
+    @override_settings(
+        MCP_INDEXING_ENABLED=True,
+        OPENSEARCH_INDEX_ON_SAVE=True,
+    )
+    @patch("documents.views.try_mcp_index_document")
+    @patch("documents.views.try_reindex_document")
+    @patch("documents.views.try_rebuild_document_embeddings")
+    def test_upload_search_index_uses_mcp_when_enabled(
+        self,
+        mock_rebuild,
+        mock_reindex,
+        mock_mcp,
+    ):
+        request = Mock()
+        document = Mock()
+        mock_mcp.return_value = True
+
+        indexed = try_index_document_for_search(request, document)
+
+        self.assertTrue(indexed)
+        mock_mcp.assert_called_once_with(
+            request,
+            document,
+            replace_existing_chunks=True,
+        )
+        mock_rebuild.assert_not_called()
+        mock_reindex.assert_not_called()
+
 
 class OpenSearchIndexingTests(SimpleTestCase):
     def test_build_document_payload_uses_canonical_document_fields(self):
@@ -615,6 +687,184 @@ class OpenSearchViewHookTests(SimpleTestCase):
 
         self.assertFalse(indexed)
         mock_warning.assert_called_once()
+
+    @override_settings(
+        MCP_INDEXING_ENABLED=True,
+        OPENSEARCH_INDEX_ON_SAVE=True,
+    )
+    @patch("documents.views.mcp_index_document")
+    @patch("documents.views.reindex_document")
+    def test_reindex_hook_uses_mcp_without_rebuilding_chunks(
+        self,
+        mock_reindex,
+        mock_mcp,
+    ):
+        request = Mock()
+        document = Mock(
+            id=42,
+            file=SimpleNamespace(name="documents/policy.pdf"),
+        )
+        mock_mcp.return_value = {"status": "ok"}
+
+        indexed = try_reindex_document(request, document)
+
+        self.assertTrue(indexed)
+        mock_reindex.assert_not_called()
+        payload = mock_mcp.call_args.args[0]
+        self.assertEqual(payload["document"]["document_id"], 42)
+        self.assertEqual(
+            payload["document"]["file_name"],
+            "documents/policy.pdf",
+        )
+        self.assertFalse(payload["options"]["replace_existing_chunks"])
+        self.assertTrue(payload["options"]["index_document_metadata"])
+        self.assertTrue(payload["options"]["index_chunks"])
+        self.assertEqual(payload["trace"]["source"], "django-view")
+        self.assertTrue(payload["trace"]["request_id"])
+
+    @override_settings(
+        MCP_INDEXING_ENABLED=True,
+        OPENSEARCH_INDEX_ON_SAVE=True,
+    )
+    @patch("documents.views.messages.warning")
+    @patch("documents.views.mcp_index_document")
+    def test_reindex_hook_warns_on_mcp_error_response(
+        self,
+        mock_mcp,
+        mock_warning,
+    ):
+        request = Mock()
+        document = Mock(id=42, file=None)
+        mock_mcp.return_value = {
+            "status": "error",
+            "error": {"code": "indexing_unavailable"},
+        }
+
+        indexed = try_reindex_document(request, document)
+
+        self.assertFalse(indexed)
+        mock_warning.assert_called_once()
+
+
+class BulkImportMCPIndexingTests(SimpleTestCase):
+    def build_document(self):
+        return Mock(
+            id=42,
+            file=SimpleNamespace(name="documents/policy.txt"),
+        )
+
+    @override_settings(MCP_INDEXING_ENABLED=True)
+    @patch("documents.management.commands.bulk_import_documents.reindex_document")
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "rebuild_document_embeddings"
+    )
+    @patch("documents.management.commands.bulk_import_documents.get_opensearch_client")
+    @patch("documents.management.commands.bulk_import_documents.mcp_index_document")
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "Command.import_file"
+    )
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "Command.get_supported_files"
+    )
+    def test_bulk_import_uses_mcp_indexing_when_enabled(
+        self,
+        mock_supported_files,
+        mock_import_file,
+        mock_mcp,
+        mock_client,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        mock_supported_files.return_value = [Path("policy.txt")]
+        mock_import_file.return_value = self.build_document()
+        mock_mcp.return_value = {
+            "status": "ok",
+            "summary": {
+                "chunks_created": 2,
+                "chunk_records_indexed": 2,
+            },
+        }
+        stdout = StringIO()
+
+        with TemporaryDirectory() as source_dir:
+            call_command(
+                "bulk_import_documents",
+                source_dir,
+                "--rebuild-embeddings",
+                "--reindex-opensearch",
+                "--create-indexes",
+                stdout=stdout,
+            )
+
+        output = stdout.getvalue()
+        self.assertIn("2 chunks embedded", output)
+        self.assertIn("2 chunks indexed", output)
+        self.assertIn("embedded=1 indexed=1", output)
+        payload = mock_mcp.call_args.args[0]
+        self.assertEqual(payload["document"]["document_id"], 42)
+        self.assertEqual(payload["document"]["file_name"], "documents/policy.txt")
+        self.assertTrue(payload["options"]["replace_existing_chunks"])
+        self.assertTrue(payload["options"]["index_document_metadata"])
+        self.assertTrue(payload["options"]["index_chunks"])
+        self.assertEqual(payload["trace"]["source"], "bulk_import_documents")
+        mock_client.assert_not_called()
+        mock_rebuild.assert_not_called()
+        mock_reindex.assert_not_called()
+
+    @override_settings(MCP_INDEXING_ENABLED=False)
+    @patch("documents.management.commands.bulk_import_documents.ensure_indexes")
+    @patch("documents.management.commands.bulk_import_documents.get_opensearch_client")
+    @patch("documents.management.commands.bulk_import_documents.reindex_document")
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "rebuild_document_embeddings"
+    )
+    @patch("documents.management.commands.bulk_import_documents.mcp_index_document")
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "Command.import_file"
+    )
+    @patch(
+        "documents.management.commands.bulk_import_documents."
+        "Command.get_supported_files"
+    )
+    def test_bulk_import_keeps_direct_indexing_when_mcp_disabled(
+        self,
+        mock_supported_files,
+        mock_import_file,
+        mock_mcp,
+        mock_rebuild,
+        mock_reindex,
+        mock_client,
+        mock_ensure,
+    ):
+        client = Mock()
+        document = self.build_document()
+        mock_supported_files.return_value = [Path("policy.txt")]
+        mock_import_file.return_value = document
+        mock_client.return_value = client
+        mock_rebuild.return_value = 2
+        mock_reindex.return_value = 2
+        stdout = StringIO()
+
+        with TemporaryDirectory() as source_dir:
+            call_command(
+                "bulk_import_documents",
+                source_dir,
+                "--rebuild-embeddings",
+                "--reindex-opensearch",
+                "--create-indexes",
+                stdout=stdout,
+            )
+
+        self.assertIn("embedded=1 indexed=1", stdout.getvalue())
+        mock_mcp.assert_not_called()
+        mock_rebuild.assert_called_once_with(document)
+        mock_reindex.assert_called_once_with(document, client=client)
+        mock_ensure.assert_called_once_with(client=client)
 
 
 class SourceOfTruthViewFlowTests(SimpleTestCase):
@@ -1600,6 +1850,226 @@ class MCPRetrievalTests(SimpleTestCase):
         self.assertEqual(response["error"]["code"], "permission_context_missing")
         self.assertFalse(response["error"]["retryable"])
         mock_retrieve.assert_not_called()
+
+
+class MCPIndexingTests(SimpleTestCase):
+    def build_document(self, extracted_text="First paragraph.\n\nSecond paragraph."):
+        document = Mock(
+            id=42,
+            extracted_text=extracted_text,
+        )
+        document.chunks.count.return_value = 2
+        return document
+
+    @override_settings(
+        AI_EMBEDDING_MAX_CHARS=2500,
+        AI_EMBEDDING_DIMENSIONS=1024,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.mcp_indexing.reindex_document")
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_returns_contract_response(
+        self,
+        mock_get,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        document = self.build_document("Secret policy text")
+        mock_get.return_value = document
+        mock_rebuild.return_value = 3
+        mock_reindex.return_value = 3
+
+        with self.assertLogs("documents.mcp_indexing", level="INFO") as logs:
+            response = mcp_index_document({
+                "document": {
+                    "document_id": 42,
+                    "content_version": "sha256:test",
+                },
+                "trace": {"request_id": "index-request-123"},
+            })
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["document_id"], 42)
+        self.assertEqual(response["content_version"], "sha256:test")
+        self.assertEqual(response["trace"]["request_id"], "index-request-123")
+        self.assertEqual(response["summary"]["chunks_created"], 3)
+        self.assertEqual(response["summary"]["chunks_replaced"], 2)
+        self.assertEqual(response["summary"]["chunks_embedded"], 3)
+        self.assertEqual(response["summary"]["document_records_indexed"], 1)
+        self.assertEqual(response["summary"]["chunk_records_indexed"], 3)
+        self.assertFalse(response["summary"]["dry_run"])
+        self.assertEqual(
+            response["indexing"]["embedding_model"],
+            "amazon.titan-embed-text-v2:0",
+        )
+        self.assertEqual(
+            response["indexing"]["chunk_index"],
+            "docmanager-document-chunks",
+        )
+        mock_get.assert_called_once_with(pk=42)
+        mock_rebuild.assert_called_once_with(document)
+        mock_reindex.assert_called_once_with(document, create_indexes=True)
+        self.assertIn("mcp_indexing status=ok", "\n".join(logs.output))
+        self.assertIn("request_id=index-request-123", "\n".join(logs.output))
+        self.assertNotIn("Secret policy text", "\n".join(logs.output))
+
+    @override_settings(
+        AI_EMBEDDING_MAX_CHARS=20,
+        AI_EMBEDDING_DIMENSIONS=1024,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+    )
+    @patch("documents.mcp_indexing.reindex_document")
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_dry_run_does_not_write(
+        self,
+        mock_get,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        document = self.build_document("First paragraph.\n\nSecond paragraph.")
+        mock_get.return_value = document
+
+        response = mcp_index_document({
+            "document": {"document_id": 42},
+            "options": {"dry_run": True, "max_chunk_chars": 20},
+            "trace": {"request_id": "dry-run"},
+        })
+
+        self.assertEqual(response["status"], "ok")
+        self.assertTrue(response["summary"]["dry_run"])
+        self.assertEqual(response["summary"]["chunks_created"], 2)
+        self.assertEqual(response["summary"]["chunks_replaced"], 2)
+        self.assertEqual(response["summary"]["chunks_embedded"], 0)
+        self.assertEqual(response["summary"]["chunk_records_indexed"], 0)
+        self.assertEqual(response["warnings"], ["dry_run_no_writes"])
+        mock_rebuild.assert_not_called()
+        mock_reindex.assert_not_called()
+
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_rejects_missing_document_id(self, mock_get):
+        response = mcp_index_document({
+            "document": {},
+            "trace": {"request_id": "missing-id"},
+        })
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "invalid_request")
+        self.assertFalse(response["error"]["retryable"])
+        self.assertEqual(response["trace"]["request_id"], "missing-id")
+        mock_get.assert_not_called()
+
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_rejects_unsupported_options(self, mock_get):
+        response = mcp_index_document({
+            "document": {"document_id": 42},
+            "options": {
+                "chunking_strategy": "sentence",
+            },
+            "trace": {"request_id": "bad-options"},
+        })
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["document_id"], 42)
+        self.assertEqual(response["error"]["code"], "invalid_request")
+        self.assertFalse(response["error"]["retryable"])
+        mock_get.assert_not_called()
+
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_maps_document_not_found(self, mock_get):
+        mock_get.side_effect = Document.DoesNotExist
+
+        response = mcp_index_document({
+            "document": {"document_id": 404},
+            "trace": {"request_id": "not-found"},
+        })
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["document_id"], 404)
+        self.assertEqual(response["error"]["code"], "document_not_found")
+        self.assertFalse(response["error"]["retryable"])
+
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_rejects_empty_extracted_text(
+        self,
+        mock_get,
+        mock_rebuild,
+    ):
+        mock_get.return_value = self.build_document("")
+
+        response = mcp_index_document({"document": {"document_id": 42}})
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "no_extracted_text")
+        self.assertFalse(response["error"]["retryable"])
+        mock_rebuild.assert_not_called()
+
+    @patch("documents.mcp_indexing.reindex_document")
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_can_reindex_metadata_without_extracted_text(
+        self,
+        mock_get,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        mock_get.return_value = self.build_document("")
+        mock_reindex.return_value = 0
+
+        response = mcp_index_document({
+            "document": {"document_id": 42},
+            "options": {"replace_existing_chunks": False},
+        })
+
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["summary"]["chunks_created"], 2)
+        self.assertEqual(response["summary"]["chunks_embedded"], 2)
+        self.assertEqual(response["summary"]["document_records_indexed"], 1)
+        self.assertEqual(response["summary"]["chunk_records_indexed"], 0)
+        mock_rebuild.assert_not_called()
+        mock_reindex.assert_called_once()
+
+    @patch("documents.mcp_indexing.reindex_document")
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_maps_embedding_errors(
+        self,
+        mock_get,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        mock_get.return_value = self.build_document()
+        mock_rebuild.side_effect = EmbeddingError("AWS failed")
+
+        response = mcp_index_document({"document": {"document_id": 42}})
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "embedding_provider_error")
+        self.assertTrue(response["error"]["retryable"])
+        mock_reindex.assert_not_called()
+
+    @patch("documents.mcp_indexing.reindex_document")
+    @patch("documents.mcp_indexing.rebuild_document_embeddings")
+    @patch("documents.mcp_indexing.Document.objects.get")
+    def test_index_document_maps_opensearch_errors(
+        self,
+        mock_get,
+        mock_rebuild,
+        mock_reindex,
+    ):
+        mock_get.return_value = self.build_document()
+        mock_rebuild.return_value = 2
+        mock_reindex.side_effect = OpenSearchIndexingError("timeout")
+
+        response = mcp_index_document({"document": {"document_id": 42}})
+
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["error"]["code"], "indexing_timeout")
+        self.assertTrue(response["error"]["retryable"])
 
 
 class MCPRetrievalHealthCommandTests(SimpleTestCase):

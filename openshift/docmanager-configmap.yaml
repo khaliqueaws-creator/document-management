@@ -5,6 +5,7 @@ metadata:
 data:
   DJANGO_DEBUG: "False"
   DJANGO_SECURE_SSL_REDIRECT: "False"
+  LOG_LEVEL: "INFO"
   DB_ENGINE: "postgresql"
   DB_HOST: "postgresql"
   DB_PORT: "5432"
@@ -37,6 +38,7 @@ data:
   OPENSEARCH_TIMEOUT_SECONDS: "10"
   MCP_RETRIEVAL_ENABLED: "True"
   MCP_RETRIEVAL_FALLBACK_ENABLED: "False"
+  MCP_INDEXING_ENABLED: "True"
   AUTO_AI_METADATA_ON_UPLOAD: "True"
   ALLOWED_HOSTS: "document-app-document-app.apps-crc.testing,localhost,127.0.0.1,docsdemo.khalique.net"
   MEDIA_ROOT: "/app/media"

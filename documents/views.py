@@ -10,6 +10,7 @@ from django.core.paginator import Paginator
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
+from uuid import uuid4
 
 from .forms import (
     DocumentForm,
@@ -18,6 +19,7 @@ from .forms import (
 )
 from .ai_metadata import MetadataSuggestionError, suggest_metadata
 from .embeddings import EmbeddingError, rebuild_document_embeddings
+from .mcp_indexing import index_document as mcp_index_document
 from .models import AuditEvent, Document, DocumentChunk
 from .opensearch_indexing import (
     OpenSearchIndexingError,
@@ -178,9 +180,75 @@ def try_rebuild_document_embeddings(request, document):
     return True
 
 
+def build_mcp_indexing_payload(document, replace_existing_chunks=True):
+    return {
+        "document": {
+            "document_id": document.id,
+            "file_name": document.file.name if document.file else "",
+        },
+        "options": {
+            "replace_existing_chunks": replace_existing_chunks,
+            "index_document_metadata": settings.OPENSEARCH_INDEX_ON_SAVE,
+            "index_chunks": settings.OPENSEARCH_INDEX_ON_SAVE,
+        },
+        "trace": {
+            "request_id": str(uuid4()),
+            "source": "django-view",
+            "actor": "django-backend",
+        },
+    }
+
+
+def try_mcp_index_document(request, document, replace_existing_chunks=True):
+    try:
+        response = mcp_index_document(
+            build_mcp_indexing_payload(
+                document,
+                replace_existing_chunks=replace_existing_chunks,
+            )
+        )
+    except Exception:
+        messages.warning(
+            request,
+            "Document saved, but MCP indexing could not be completed."
+        )
+        return False
+
+    if response.get("status") != "ok":
+        error = response.get("error") or {}
+        code = error.get("code") or "internal_error"
+        messages.warning(
+            request,
+            f"Document saved, but MCP indexing failed: {code}."
+        )
+        return False
+
+    return True
+
+
+def try_index_document_for_search(request, document):
+    if settings.MCP_INDEXING_ENABLED:
+        return try_mcp_index_document(
+            request,
+            document,
+            replace_existing_chunks=True,
+        )
+
+    rebuilt = try_rebuild_document_embeddings(request, document)
+    indexed = try_reindex_document(request, document)
+    return rebuilt or indexed
+
+
 def try_reindex_document(request, document):
     if not settings.OPENSEARCH_INDEX_ON_SAVE:
         return False
+
+    if settings.MCP_INDEXING_ENABLED:
+        return try_mcp_index_document(
+            request,
+            document,
+            replace_existing_chunks=False,
+        )
 
     try:
         reindex_document(document, create_indexes=True)
@@ -376,8 +444,7 @@ def upload_document(request):
                 document.extracted_text = f"TEXT_EXTRACTION_FAILED: {str(e)}"
                 document.save()
 
-            try_rebuild_document_embeddings(request, document)
-            try_reindex_document(request, document)
+            try_index_document_for_search(request, document)
 
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
@@ -539,8 +606,7 @@ def confirm_document(request):
             )
 
         document.save()
-        try_rebuild_document_embeddings(request, document)
-        try_reindex_document(request, document)
+        try_index_document_for_search(request, document)
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         if try_store_ai_metadata_suggestions(document):

@@ -140,6 +140,7 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 | AI_RAG_MIN_RETRIEVAL_SCORE | 0 | Optional OpenSearch score floor for retrieved RAG chunks. |
 | MCP_RETRIEVAL_ENABLED | True | Routes Ask Documents retrieval through the MCP boundary. |
 | MCP_RETRIEVAL_FALLBACK_ENABLED | False | Disables direct retrieval fallback during MCP validation so failures are visible. |
+| MCP_INDEXING_ENABLED | False | Routes upload/reprocess indexing through the MCP indexing boundary when enabled. |
 
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,
@@ -259,18 +260,21 @@ flowchart LR
 ## Planned MCP Indexing Rollout
 
 The MCP indexing contract is documented in
-[`mcp-indexing-contract.md`](mcp-indexing-contract.md). Phase 1 is
-documentation-only and does not change deployment behavior.
+[`mcp-indexing-contract.md`](mcp-indexing-contract.md). The application now has
+an in-process MCP indexing wrapper and a feature flag for browser-path rollout.
 
-Future implementation should roll out in this order:
+Roll out in this order:
 
-1. Add an in-process `index_document` wrapper that reuses existing chunking,
-   Bedrock embedding, `DocumentChunk`, and OpenSearch indexing code.
-2. Validate the wrapper with a document-id-specific management command before
-   changing upload or bulk import flows.
-3. Add a feature flag before routing upload/import/reprocessing through the MCP
-   indexing wrapper.
-4. Keep the existing direct rebuild and reindex commands available as rollback
+1. Keep `MCP_INDEXING_ENABLED=False` for normal direct indexing behavior.
+2. Build and deploy an image that includes `documents.mcp_indexing`.
+3. Set `MCP_INDEXING_ENABLED=True` in the ConfigMap for browser-path validation.
+4. Upload or reprocess one known document and confirm logs include
+   `mcp_indexing status=ok`.
+5. For a clean-room test, bulk import a known folder with
+   `bulk_import_documents --rebuild-embeddings --reindex-opensearch`; with
+   `MCP_INDEXING_ENABLED=True`, the command uses the MCP indexing boundary.
+6. Validate Search, AI Search, and Ask Documents against those documents.
+7. Keep the existing direct rebuild and reindex commands available as rollback
    tools until MCP indexing has parity.
 
 ## Future Deployment Enhancements

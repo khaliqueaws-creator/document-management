@@ -1,11 +1,13 @@
 import mimetypes
 from pathlib import Path
+from uuid import uuid4
 
 from django.conf import settings
 from django.core.files import File
 from django.core.management.base import BaseCommand, CommandError
 
 from documents.embeddings import EmbeddingError, rebuild_document_embeddings
+from documents.mcp_indexing import index_document as mcp_index_document
 from documents.models import Document
 from documents.opensearch_indexing import (
     OpenSearchIndexingError,
@@ -88,8 +90,12 @@ class Command(BaseCommand):
         indexed = 0
         failed = 0
         opensearch_client = None
+        use_mcp_indexing = (
+            settings.MCP_INDEXING_ENABLED
+            and (options["rebuild_embeddings"] or options["reindex_opensearch"])
+        )
 
-        if options["reindex_opensearch"]:
+        if options["reindex_opensearch"] and not use_mcp_indexing:
             opensearch_client = get_opensearch_client()
 
             if options["create_indexes"]:
@@ -109,7 +115,17 @@ class Command(BaseCommand):
             chunks_created = None
             chunks_indexed = None
 
-            if options["rebuild_embeddings"]:
+            if use_mcp_indexing:
+                chunks_created, chunks_indexed = self.index_with_mcp(
+                    document,
+                    options,
+                )
+                if options["rebuild_embeddings"] and chunks_created is not None:
+                    embedded += 1
+                if options["reindex_opensearch"] and chunks_indexed is not None:
+                    indexed += 1
+
+            elif options["rebuild_embeddings"]:
                 try:
                     chunks_created = rebuild_document_embeddings(document)
                     embedded += 1
@@ -119,7 +135,7 @@ class Command(BaseCommand):
                         f"embedding ERROR {error}"
                     )
 
-            if options["reindex_opensearch"]:
+            if options["reindex_opensearch"] and not use_mcp_indexing:
                 try:
                     chunks_indexed = reindex_document(
                         document,
@@ -149,6 +165,52 @@ class Command(BaseCommand):
             f"Done. processed={processed} imported={imported} "
             f"embedded={embedded} indexed={indexed} failed={failed}"
         )
+
+    def build_mcp_indexing_payload(self, document, options):
+        return {
+            "document": {
+                "document_id": document.id,
+                "file_name": document.file.name if document.file else "",
+            },
+            "options": {
+                "replace_existing_chunks": options["rebuild_embeddings"],
+                "index_document_metadata": options["reindex_opensearch"],
+                "index_chunks": options["reindex_opensearch"],
+            },
+            "trace": {
+                "request_id": str(uuid4()),
+                "source": "bulk_import_documents",
+                "actor": "django-management-command",
+            },
+        }
+
+    def index_with_mcp(self, document, options):
+        response = mcp_index_document(
+            self.build_mcp_indexing_payload(document, options)
+        )
+
+        if response.get("status") != "ok":
+            error = response.get("error") or {}
+            code = error.get("code") or "internal_error"
+            self.stderr.write(
+                f"Document {document.id} {document.file.name}: "
+                f"MCP indexing ERROR {code}"
+            )
+            return None, None
+
+        summary = response.get("summary") or {}
+        chunks_created = (
+            summary.get("chunks_created")
+            if options["rebuild_embeddings"]
+            else None
+        )
+        chunks_indexed = (
+            summary.get("chunk_records_indexed")
+            if options["reindex_opensearch"]
+            else None
+        )
+
+        return chunks_created, chunks_indexed
 
     def get_supported_files(self, source_dir):
         supported_extensions = set(settings.ALLOWED_DOCUMENT_EXTENSIONS)

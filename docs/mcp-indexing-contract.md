@@ -254,7 +254,7 @@ indexing stack:
 | `documents.embeddings.chunk_text()` | Preserve paragraph-aware chunking semantics. |
 | `documents.embeddings.rebuild_document_embeddings()` | Reuse or split into smaller functions for chunk creation and embedding. |
 | `documents.opensearch_indexing.reindex_document()` | Reuse for document and chunk index writes. |
-| `bulk_import_documents --rebuild-embeddings --reindex-opensearch` | May call the MCP wrapper after validation, but must keep current behavior until then. |
+| `bulk_import_documents --rebuild-embeddings --reindex-opensearch` | Calls the MCP wrapper when `MCP_INDEXING_ENABLED=True`; keeps the direct path when disabled. |
 | Upload-time embedding/indexing hooks | May call the MCP wrapper after validation, but must not change the user upload flow first. |
 
 ## Rollout Plan

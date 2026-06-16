@@ -31,6 +31,7 @@ if not SECRET_KEY:
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() in ("1", "true", "yes")
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 
 def env_bool(name, default=False):
@@ -83,6 +84,33 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',    
 ]
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+        },
+    },
+    "loggers": {
+        "documents.mcp_indexing": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "documents.mcp_retrieval": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "documents.rag": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}
 
 ROOT_URLCONF = 'docmanager.urls'
 
@@ -240,6 +268,7 @@ MCP_RETRIEVAL_FALLBACK_ENABLED = env_bool(
     "MCP_RETRIEVAL_FALLBACK_ENABLED",
     True,
 )
+MCP_INDEXING_ENABLED = env_bool("MCP_INDEXING_ENABLED", False)
 
 AUTO_AI_METADATA_ON_UPLOAD = os.environ.get(
     "AUTO_AI_METADATA_ON_UPLOAD",
