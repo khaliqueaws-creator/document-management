@@ -256,6 +256,23 @@ flowchart LR
 - Use OpenShift rollout status commands to validate deployments.
 - Cloudflare Tunnel exposes the internal OpenShift route externally for demo access.
 
+## Planned MCP Indexing Rollout
+
+The MCP indexing contract is documented in
+[`mcp-indexing-contract.md`](mcp-indexing-contract.md). Phase 1 is
+documentation-only and does not change deployment behavior.
+
+Future implementation should roll out in this order:
+
+1. Add an in-process `index_document` wrapper that reuses existing chunking,
+   Bedrock embedding, `DocumentChunk`, and OpenSearch indexing code.
+2. Validate the wrapper with a document-id-specific management command before
+   changing upload or bulk import flows.
+3. Add a feature flag before routing upload/import/reprocessing through the MCP
+   indexing wrapper.
+4. Keep the existing direct rebuild and reindex commands available as rollback
+   tools until MCP indexing has parity.
+
 ## Future Deployment Enhancements
 
 Planned future improvements include:

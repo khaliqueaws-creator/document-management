@@ -303,6 +303,11 @@ are reserved as likely follow-ups:
 | `compare_documents` | Retrieve comparison context across two or more accessible documents. |
 | `list_document_facets` | Return available metadata facets for search filters. |
 
+Write-time indexing tools are tracked separately in
+[MCP Document Indexing Contract](mcp-indexing-contract.md). Retrieval should
+remain read-only; chunking, embedding, and OpenSearch writes belong to the
+indexing contract.
+
 ## Implementation Notes
 
 - The current implementation wraps the existing `retrieve_question_context()`
