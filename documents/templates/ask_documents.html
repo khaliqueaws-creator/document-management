@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Ask Documents{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Ask Documents</h2>
+        {% if question %}
+            <p class="note">Grounded answer with document citations</p>
+        {% else %}
+            <p class="note">Ask a question across uploaded documents.</p>
+        {% endif %}
+    </div>
+</div>
+
+<form method="get" class="search-box">
+    <input type="text"
+           name="q"
+           placeholder="Ask a document question"
+           value="{{ question }}">
+    <button type="submit">Ask</button>
+    <a href="{% url 'ask_documents' %}" class="secondary-action search-reset">Reset</a>
+</form>
+
+{% if not has_embeddings %}
+    <p class="empty">
+        No AI embeddings found. Run rebuild_embeddings or upload documents after enabling Bedrock.
+    </p>
+{% elif rag_result %}
+    <div class="ai-suggestion-panel">
+        <h3>Answer</h3>
+        <p>{{ rag_result.answer|linebreaksbr }}</p>
+    </div>
+
+    {% if rag_result.citations %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Citation</th>
+                        <th>Document</th>
+                        <th>Score</th>
+                        <th>Excerpt</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for citation in rag_result.citations %}
+                    <tr>
+                        <td>[{{ citation.citation_id }}]</td>
+                        <td>
+                            <div class="primary-text">
+                                {{ citation.document.file.name }}
+                            </div>
+                            <div class="muted-text">
+                                {{ citation.document.document_type|default:"Untyped document" }}
+                            </div>
+                        </td>
+                        <td>{{ citation.score|floatformat:3 }}</td>
+                        <td>{{ citation.chunk_text|truncatechars:260 }}</td>
+                        <td>
+                            <div class="action-list">
+                                <a href="{% url 'secure_document_view' citation.document.id %}"
+                                   target="_blank"
+                                   rel="noopener">
+                                    Open
+                                </a>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
+{% endif %}
+
+{% endblock %}

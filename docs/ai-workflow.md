@@ -14,7 +14,8 @@ sequenceDiagram
     participant OCR as Text Extraction / OCR
     participant AI as AI Provider
     participant Embeddings as Bedrock Titan Embeddings
-    participant DB as MySQL
+    participant DB as PostgreSQL
+    participant Search as OpenSearch
 
     Loader->>Django: Upload document + metadata
     Django->>Media: Save uploaded file
@@ -22,6 +23,7 @@ sequenceDiagram
     OCR-->>Django: Extracted text
     Django->>Embeddings: Generate chunk embeddings when text is valid
     Embeddings-->>Django: Embedding vectors
+    Django->>Search: Index document/chunk search records
     Django->>AI: Send text for metadata suggestion
     AI-->>Django: Suggested type, department, tags, summary
     Django->>DB: Save metadata, extracted text, chunks, AI suggestion, audit event
@@ -189,21 +191,41 @@ flowchart TB
     Chunk --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Store[DocumentChunk JSON embeddings]
     Query[User AI search query] --> QueryEmbedding[Query embedding]
-    QueryEmbedding --> Compare[Cosine similarity]
-    Store --> Compare
-    Compare --> Results[Ranked document results]
+    AskQuery[Ask Documents question] --> MCP[MCP retrieval boundary]
+    MCP --> RAGEmbedding[RAG question embedding]
+    Store --> Index[OpenSearch chunk vector index]
+    QueryEmbedding --> Search[OpenSearch vector retrieval]
+    Index --> Search
+    RAGEmbedding --> Search
+    Search --> Hydrate[Hydrate PostgreSQL Documents]
+    Hydrate --> Results[Ranked document results]
+    Hydrate --> RAGPrompt[Grounded Q&A prompt]
+    RAGPrompt --> Generator[AWS Bedrock Nova Lite]
+    Generator --> Answer[Answer with citations]
 ```
 
 Document chunks are stored in the database with their source text, embedding
-model, and JSON embedding vector. AI Search embeds the user's query, compares it
-with stored chunk embeddings, keeps the best matching chunk per document, and
-returns ranked document results.
+model, and JSON embedding vector. OpenSearch stores the derived searchable
+chunk records. AI Search embeds the user's query, retrieves matching chunks from
+OpenSearch, hydrates final document records from PostgreSQL, and returns ranked
+document results through the Django UI.
+
+The Ask Documents page uses the same retrieved and hydrated chunks as grounded
+context for document question answering. Django routes retrieval through the
+MCP `search_documents` boundary, AWS Bedrock Titan creates query embeddings,
+OpenSearch retrieves matching chunks, and AWS Bedrock Nova Lite generates the
+answer after MCP returns structured context. Answers include citations that link
+back to source `Document` records. Retrieved chunks are hydrated through the
+current request's accessible PostgreSQL `Document` queryset before they are
+included in the prompt. Empty or low-context retrieval returns a clear
+no-context answer instead of asking the model to guess.
 
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
+- RAG document Q&A uses the MCP retrieval boundary, retrieves OpenSearch chunks, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.
@@ -216,8 +238,7 @@ Planned future enhancements include:
 
 - Background AI processing queues.
 - Semantic search refinements.
-- Vector database storage such as PostgreSQL with pgvector.
-- RAG document question answering.
+- OpenSearch-backed semantic and hybrid retrieval refinements.
 - Metadata confidence scoring.
 - Duplicate document detection.
 - AI-assisted workflow approvals.

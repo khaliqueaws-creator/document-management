@@ -15,6 +15,7 @@ venv/
 .env
 env.txt
 openshift/docmanager-secret.local.yaml
+k8s/yaml/docmanager-secret.local.yaml
 *.pem
 *.key
 *.crt

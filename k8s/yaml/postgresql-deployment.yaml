@@ -1,61 +1,58 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: mysql
+  name: postgresql
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: mysql
+      app: postgresql
   template:
     metadata:
       labels:
-        app: mysql
-        deployment: mysql
+        app: postgresql
+        deployment: postgresql
     spec:
       containers:
-        - name: mysql
-          image: image-registry.openshift-image-registry.svc:5000/openshift/mysql:8.0
+        - name: postgresql
+          image: postgres:16
           ports:
-            - containerPort: 3306
+            - containerPort: 5432
           env:
-            - name: MYSQL_DATABASE
+            - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
                   name: docmanager-secrets
                   key: DB_NAME
-            - name: MYSQL_USER
+            - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
                   name: docmanager-secrets
                   key: DB_USER
-            - name: MYSQL_PASSWORD
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: docmanager-secrets
                   key: DB_PASSWORD
-            - name: MYSQL_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: docmanager-secrets
-                  key: MYSQL_ROOT_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
-            - name: mysql-data
-              mountPath: /var/lib/mysql/data
+            - name: postgresql-data
+              mountPath: /var/lib/postgresql/data
       volumes:
-        - name: mysql-data
+        - name: postgresql-data
           persistentVolumeClaim:
-            claimName: mysql-pvc
+            claimName: postgresql-pvc
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mysql
+  name: postgresql
 spec:
   selector:
-    app: mysql
+    app: postgresql
   ports:
-    - name: mysql
+    - name: postgresql
       protocol: TCP
-      port: 3306
-      targetPort: 3306
+      port: 5432
+      targetPort: 5432

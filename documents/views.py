@@ -19,6 +19,12 @@ from .forms import (
 from .ai_metadata import MetadataSuggestionError, suggest_metadata
 from .embeddings import EmbeddingError, rebuild_document_embeddings
 from .models import AuditEvent, Document, DocumentChunk
+from .opensearch_indexing import (
+    OpenSearchIndexingError,
+    delete_document as delete_indexed_document,
+    reindex_document,
+)
+from .rag import RAGError, answer_question
 from .semantic_search import search_documents_by_meaning
 from .auth import oauth
 from .permissions import (
@@ -69,6 +75,13 @@ def get_document_audit_metadata(document):
         "ocr_language": document.ocr_language,
         "file": document.file.name if document.file else "",
     }
+
+
+def get_accessible_documents_queryset(request):
+    if is_viewer(request):
+        return Document.objects.all()
+
+    return Document.objects.none()
 
 
 def record_audit_event(request, document, action, metadata=None):
@@ -159,6 +172,38 @@ def try_rebuild_document_embeddings(request, document):
         messages.warning(
             request,
             "Document uploaded, but search embeddings could not be generated."
+        )
+        return False
+
+    return True
+
+
+def try_reindex_document(request, document):
+    if not settings.OPENSEARCH_INDEX_ON_SAVE:
+        return False
+
+    try:
+        reindex_document(document, create_indexes=True)
+    except OpenSearchIndexingError:
+        messages.warning(
+            request,
+            "Document saved, but OpenSearch indexing could not be completed."
+        )
+        return False
+
+    return True
+
+
+def try_delete_indexed_document(request, document_id):
+    if not settings.OPENSEARCH_INDEX_ON_SAVE:
+        return False
+
+    try:
+        delete_indexed_document(document_id)
+    except OpenSearchIndexingError:
+        messages.warning(
+            request,
+            "Document deleted, but OpenSearch cleanup could not be completed."
         )
         return False
 
@@ -332,15 +377,20 @@ def upload_document(request):
                 document.save()
 
             try_rebuild_document_embeddings(request, document)
+            try_reindex_document(request, document)
 
             record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
             if try_store_ai_metadata_suggestions(document):
+                document.refresh_from_db()
+                try_reindex_document(request, document)
                 messages.success(
                     request,
                     "AI metadata suggestions are ready for review."
                 )
             elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+                document.refresh_from_db()
+                try_reindex_document(request, document)
                 messages.warning(
                     request,
                     "Document uploaded, but AI metadata suggestions failed."
@@ -490,14 +540,19 @@ def confirm_document(request):
 
         document.save()
         try_rebuild_document_embeddings(request, document)
+        try_reindex_document(request, document)
         record_audit_event(request, document, AuditEvent.ACTION_UPLOAD)
 
         if try_store_ai_metadata_suggestions(document):
+            document.refresh_from_db()
+            try_reindex_document(request, document)
             messages.success(
                 request,
                 "AI metadata suggestions are ready for review."
             )
         elif document.ai_suggestion_status == Document.AI_STATUS_FAILED:
+            document.refresh_from_db()
+            try_reindex_document(request, document)
             messages.warning(
                 request,
                 "Document saved, but AI metadata suggestions failed."
@@ -560,7 +615,12 @@ def search_documents(request):
 def ai_search(request):
     query = (request.GET.get("q") or "").strip()
     results = []
-    has_embeddings = DocumentChunk.objects.exclude(embedding=[]).exists()
+    has_embeddings = (
+        DocumentChunk.objects
+        .exclude(embedding=[])
+        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .exists()
+    )
 
     if query and has_embeddings:
         try:
@@ -574,6 +634,38 @@ def ai_search(request):
     return render(request, "ai_search.html", {
         "query": query,
         "results": results,
+        "has_embeddings": has_embeddings,
+    })
+
+
+@okta_role_required(is_viewer)
+def ask_documents(request):
+    question = (request.GET.get("q") or "").strip()
+    rag_result = None
+    accessible_documents = get_accessible_documents_queryset(request)
+    has_embeddings = (
+        DocumentChunk.objects
+        .exclude(embedding=[])
+        .filter(embedding_model=settings.BEDROCK_EMBED_MODEL_ID)
+        .filter(document__in=accessible_documents)
+        .exists()
+    )
+
+    if question and has_embeddings:
+        try:
+            rag_result = answer_question(
+                question,
+                documents_queryset=accessible_documents,
+            )
+        except (EmbeddingError, RAGError) as error:
+            messages.warning(
+                request,
+                f"Document Q&A could not be completed: {error}"
+            )
+
+    return render(request, "ask_documents.html", {
+        "question": question,
+        "rag_result": rag_result,
         "has_embeddings": has_embeddings,
     })
 
@@ -636,6 +728,7 @@ def edit_document_metadata(request, document_id):
                     "after": after_metadata,
                 },
             )
+            try_reindex_document(request, document)
             return redirect("search")
 
     else:
@@ -682,9 +775,13 @@ def generate_ai_metadata(request, document_id):
                 "ai_error",
             ]
         )
+        document.refresh_from_db()
+        try_reindex_document(request, document)
         messages.error(request, str(error))
         return redirect("edit_document_metadata", document_id=document.id)
 
+    document.refresh_from_db()
+    try_reindex_document(request, document)
     messages.success(request, "AI metadata suggestions generated.")
 
     return redirect("edit_document_metadata", document_id=document.id)
@@ -726,6 +823,7 @@ def accept_ai_metadata(request, document_id):
         },
     )
     messages.success(request, "AI suggestions accepted into metadata.")
+    try_reindex_document(request, document)
 
     return redirect("edit_document_metadata", document_id=document.id)
 
@@ -742,6 +840,8 @@ def reject_ai_metadata(request, document_id):
 
     document.ai_suggestion_status = Document.AI_STATUS_REJECTED
     document.save(update_fields=["ai_suggestion_status"])
+    document.refresh_from_db()
+    try_reindex_document(request, document)
     messages.info(request, "AI suggestions rejected.")
 
     return redirect("edit_document_metadata", document_id=document.id)
@@ -768,7 +868,9 @@ def delete_document(request, document_id):
             AuditEvent.ACTION_DELETE,
             audit_metadata,
         )
+        document_id = document.id
         document.delete()
+        try_delete_indexed_document(request, document_id)
 
         return redirect("/")
 
