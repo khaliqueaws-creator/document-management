@@ -277,6 +277,60 @@ Roll out in this order:
 7. Keep the existing direct rebuild and reindex commands available as rollback
    tools until MCP indexing has parity.
 
+## Initial Bulk Upload Validation
+
+Use this flow after a brand new deployment or clean-room reset to prove the
+write and read paths are healthy.
+
+1. Confirm runtime settings and Bedrock embeddings from the app pod:
+
+   ```powershell
+   oc exec deployment/document-app -c document-app -- printenv MCP_INDEXING_ENABLED
+   oc exec deployment/document-app -c document-app -- python manage.py shell -c "from documents.embeddings import get_titan_embedding; print(len(get_titan_embedding('hello world')))"
+   ```
+
+   Expected values are `True` and `1024`.
+
+2. Copy test documents into `/tmp` on the running pod:
+
+   ```powershell
+   $pod = oc get pod -l app=document-app -o jsonpath="{.items[0].metadata.name}"
+   oc cp .\test_documents\pdf $pod`:/tmp/bulk-docs -c document-app
+   oc exec $pod -c document-app -- ls -la /tmp/bulk-docs
+   ```
+
+3. Run MCP-backed bulk import:
+
+   ```powershell
+   oc exec $pod -c document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 5 --rebuild-embeddings --reindex-opensearch --create-indexes 2>&1 | Select-String "mcp_indexing|chunks embedded|chunks indexed|Done"
+   ```
+
+   Expected output includes `mcp_indexing status=ok`, `chunks_created`,
+   `chunk_records_indexed`, and `failed=0`.
+
+4. Confirm persisted records:
+
+   ```powershell
+   oc exec $pod -c document-app -- python manage.py shell -c "from documents.models import Document, DocumentChunk; print('documents', Document.objects.count()); print('chunks', DocumentChunk.objects.count())"
+   ```
+
+5. Validate from the browser:
+
+   ```text
+   Search finds imported documents.
+   AI Search returns semantic matches.
+   Ask Documents returns an answer with citations.
+   Citation links open the source documents.
+   ```
+
+6. Confirm Ask used MCP retrieval:
+
+   ```powershell
+   oc logs deployment/document-app -c document-app --tail=300 | Select-String "mcp_retrieval|rag_mcp"
+   ```
+
+   Expected output includes `mcp_retrieval status=ok` and `rag_mcp status=ok`.
+
 ## Future Deployment Enhancements
 
 Planned future improvements include:

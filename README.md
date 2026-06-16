@@ -334,24 +334,82 @@ test_documents/rag_health_policy/
 These files are generated for upload, OCR, metadata, embedding, AI Search, and
 RAG document Q&A testing.
 
-Copy them into the running OpenShift pod:
+For a brand new deployment, first confirm the deployed app has Bedrock,
+OpenSearch, and MCP indexing enabled:
+
+```powershell
+oc exec deployment/document-app -c document-app -- printenv AWS_REGION
+oc exec deployment/document-app -c document-app -- printenv BEDROCK_EMBED_MODEL_ID
+oc exec deployment/document-app -c document-app -- printenv MCP_INDEXING_ENABLED
+oc exec deployment/document-app -c document-app -- python manage.py shell -c "from documents.embeddings import get_titan_embedding; print(len(get_titan_embedding('hello world')))"
+```
+
+Expected:
+
+```text
+us-east-1
+amazon.titan-embed-text-v2:0
+True
+1024
+```
+
+Copy a test bundle into the running OpenShift pod:
 
 ```powershell
 oc get pods -l app=document-app
-oc rsync .\test_documents\pdf\ <document-app-pod>:/tmp/bulk-docs
+$pod = oc get pod -l app=document-app -o jsonpath="{.items[0].metadata.name}"
+oc cp .\test_documents\pdf $pod`:/tmp/bulk-docs -c document-app
+oc exec $pod -c document-app -- ls -la /tmp/bulk-docs
 ```
 
-Import a batch and prepare AI Search:
+Import a small batch first and prepare AI Search:
 
 ```powershell
-oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 20 --rebuild-embeddings --reindex-opensearch --create-indexes
+oc exec $pod -c document-app -- python manage.py bulk_import_documents /tmp/bulk-docs --limit 5 --rebuild-embeddings --reindex-opensearch --create-indexes 2>&1 | Select-String "mcp_indexing|chunks embedded|chunks indexed|Done"
+```
+
+When `MCP_INDEXING_ENABLED=True`, the bulk import command uses the MCP indexing
+boundary. Expected proof:
+
+```text
+mcp_indexing status=ok code=success ... chunks_created=1 chunk_records_indexed=1
+Document ... imported; 1 chunks embedded; 1 chunks indexed
+Done. processed=5 imported=5 embedded=5 indexed=5 failed=0
+```
+
+Confirm database counts:
+
+```powershell
+oc exec $pod -c document-app -- python manage.py shell -c "from documents.models import Document, DocumentChunk; print('documents', Document.objects.count()); print('chunks', DocumentChunk.objects.count())"
 ```
 
 Import the focused RAG test bundle:
 
 ```powershell
-oc rsync .\test_documents\rag_health_policy\ <document-app-pod>:/tmp/rag-health-policy
-oc exec deployment/document-app -- python manage.py bulk_import_documents /tmp/rag-health-policy --rebuild-embeddings --reindex-opensearch --create-indexes
+oc cp .\test_documents\rag_health_policy $pod`:/tmp/rag-health-policy -c document-app
+oc exec $pod -c document-app -- python manage.py bulk_import_documents /tmp/rag-health-policy --rebuild-embeddings --reindex-opensearch --create-indexes 2>&1 | Select-String "mcp_indexing|chunks embedded|chunks indexed|Done"
+```
+
+Validate from the browser:
+
+```text
+1. Search page finds imported documents by filename, metadata, or content.
+2. AI Search returns semantically relevant imported documents.
+3. Ask Documents returns an answer with citations.
+4. Citation links open the source documents.
+```
+
+Confirm Ask Documents used MCP retrieval:
+
+```powershell
+oc logs deployment/document-app -c document-app --tail=300 | Select-String "mcp_retrieval|rag_mcp"
+```
+
+Expected proof:
+
+```text
+mcp_retrieval status=ok code=success ... returned_count=...
+rag_mcp status=ok ... results=...
 ```
 
 Run lightweight tests inside OpenShift:
