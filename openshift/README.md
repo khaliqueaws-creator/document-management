@@ -7,7 +7,9 @@ This runbook reflects the current implementation:
 - Django runs as `deployment/document-app` with Gunicorn.
 - PostgreSQL runs as `deployment/postgresql` and is the active database backend.
 - OpenSearch runs as `deployment/opensearch` and owns derived keyword/vector retrieval indexes.
-- The app image referenced by the manifests is `docker.io/khalique/document-app:1.7-rag`.
+- The app image referenced by the manifests is `docker.io/khalique/document-app:1.9-mcp-observability`.
+- Ask Documents retrieval uses the backend MCP boundary with `MCP_RETRIEVAL_ENABLED=True`.
+- MCP fallback is disabled in the checked-in OpenShift ConfigMap so validation failures are visible.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
 - Gemini can be used by setting `AI_METADATA_PROVIDER=gemini`.
 - AWS Bedrock Nova Lite can be used by setting `AI_METADATA_PROVIDER=bedrock`.
@@ -66,7 +68,7 @@ Then update:
 | File | What To Check |
 | --- | --- |
 | `openshift/docmanager-secret-template.yaml` | Django secret key, Okta client values, database values, Gemini API key, and AWS credential placeholders. |
-| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, provider toggle, Ollama settings, Gemini settings, Bedrock settings, and AI upload behavior. |
+| `openshift/docmanager-configmap.yaml` | Route host, Okta issuer, callback URL, logout URL, `ALLOWED_HOSTS`, provider toggle, Ollama settings, Gemini settings, Bedrock settings, MCP retrieval flags, and AI upload behavior. |
 | `openshift/docmanager-deployment.yaml` | Probe `Host` header. It must also appear in `ALLOWED_HOSTS`. |
 
 Current public URL values:
@@ -82,7 +84,7 @@ Current public URL values:
 The checked-in manifests reference the Docker Hub image:
 
 ```text
-docker.io/khalique/document-app:1.7-rag
+docker.io/khalique/document-app:1.9-mcp-observability
 ```
 
 If you are iterating locally, build and push a new tag before applying the
@@ -96,8 +98,8 @@ docker push docker.io/khalique/document-app:<tag>
 Then update both the init container and app container image references in
 `openshift/docmanager-deployment.yaml`.
 
-The current known-good image for the RAG document Q&A path is
-`docker.io/khalique/document-app:1.7-rag`.
+The current known-good image for the MCP-backed RAG document Q&A path is
+`docker.io/khalique/document-app:1.9-mcp-observability`.
 
 ### 4. Apply Resources
 
@@ -280,6 +282,8 @@ oc exec deployment/document-app -- printenv AI_RAG_MAX_CONTEXT_CHARS
 oc exec deployment/document-app -- printenv AI_RAG_MAX_ANSWER_TOKENS
 oc exec deployment/document-app -- printenv AI_RAG_MIN_CONTEXT_CHARS
 oc exec deployment/document-app -- printenv AI_RAG_MIN_RETRIEVAL_SCORE
+oc exec deployment/document-app -- printenv MCP_RETRIEVAL_ENABLED
+oc exec deployment/document-app -- printenv MCP_RETRIEVAL_FALLBACK_ENABLED
 ```
 
 Expected important values:
@@ -297,6 +301,8 @@ True
 700
 80
 0
+True
+False
 ```
 
 Then upload a document through the app. The current workflow is:
@@ -358,6 +364,8 @@ Examples that need this:
 - `AI_RAG_MAX_ANSWER_TOKENS`.
 - `AI_RAG_MIN_CONTEXT_CHARS`.
 - `AI_RAG_MIN_RETRIEVAL_SCORE`.
+- `MCP_RETRIEVAL_ENABLED`.
+- `MCP_RETRIEVAL_FALLBACK_ENABLED`.
 
 ### Gemini Provider Setup
 
@@ -565,6 +573,34 @@ oc exec deployment/document-app -- python manage.py health_ai_search
 oc exec deployment/document-app -- python manage.py health_ai_search --skip-bedrock
 ```
 
+Verify MCP retrieval from the deployed app:
+
+```powershell
+oc get deployment document-app -o jsonpath="{.spec.template.spec.containers[0].image}{'\n'}"
+oc exec deployment/document-app -- python manage.py shell -c "from django.conf import settings; print(settings.MCP_RETRIEVAL_ENABLED, settings.MCP_RETRIEVAL_FALLBACK_ENABLED)"
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval
+```
+
+Expected image and flags:
+
+```text
+docker.io/khalique/document-app:1.9-mcp-observability
+True False
+```
+
+Use a settings-only MCP check when you do not want to call Bedrock or
+OpenSearch:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval --skip-live
+```
+
+Print the raw MCP response for detailed troubleshooting:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval --json
+```
+
 ## E. Some Troubleshooting Tips
 
 ### Quick Checks
@@ -592,6 +628,11 @@ oc get secret docmanager-secrets
 | Pod shows `InvalidImageName` | Look for an unreplaced project placeholder in the deployment or migration job image path. |
 | OpenSearch connection refused | Confirm `deployment/opensearch` is running, then run `reindex_opensearch --create-indexes`. |
 | AI Search has no embeddings or unclear provider/index state | Run `python manage.py health_ai_search` from `deployment/document-app`. |
+| Ask Documents works only when fallback is enabled | MCP retrieval is failing; set `MCP_RETRIEVAL_FALLBACK_ENABLED=False`, rerun `health_mcp_retrieval --json`, and inspect the returned error code. |
+| MCP smoke test returns `permission_context_missing` | Include a role such as `viewer`, `loader`, or `admin`, or an allowed Okta group in `user_context`. |
+| MCP smoke test returns `retrieval_unavailable` | Check `deployment/opensearch`, run `health_ai_search --skip-bedrock`, then rebuild indexes with `reindex_opensearch --create-indexes`. |
+| MCP smoke test returns `embedding_provider_error` | Check AWS credentials, `AWS_REGION`, Bedrock model access, and `BEDROCK_EMBED_MODEL_ID`. |
+| UI Ask Documents returns low-context answer | Import documents, rebuild embeddings, reindex OpenSearch, and ask a question covered by the uploaded content. |
 | Probe returns `HTTP 400` | Make sure the probe `Host` header is listed in `ALLOWED_HOSTS`. |
 | Login works but `/` returns `500` | Check app logs and confirm migrations ran successfully. |
 | Migration files changed | Rebuild the app image before restarting the deployment. |
@@ -624,9 +665,13 @@ oc get route document-app -o jsonpath="{.spec.host}"
 oc exec deployment/document-app -- printenv OLLAMA_BASE_URL
 oc exec deployment/document-app -- printenv OLLAMA_MODEL
 oc exec deployment/document-app -- printenv AI_METADATA_PROVIDER
+oc exec deployment/document-app -- printenv MCP_RETRIEVAL_ENABLED
+oc exec deployment/document-app -- printenv MCP_RETRIEVAL_FALLBACK_ENABLED
 oc exec deployment/document-app -- printenv GEMINI_BASE_URL
 oc exec deployment/document-app -- printenv GEMINI_MODEL
 oc exec deployment/document-app -- printenv AUTO_AI_METADATA_ON_UPLOAD
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval --skip-live
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval --json
 oc exec deployment/ollama -- ollama list
 oc exec deployment/ollama -- ollama run qwen2.5:0.5b "Say OK"
 ```

@@ -1,9 +1,9 @@
 # MCP Document Retrieval Contract
 
-This document defines the first MCP tool contract for document retrieval. It is
-intended to let a future MCP server wrap the existing OpenSearch-backed RAG
-retrieval path without changing the current Django UI or the `/ask/` response
-shape.
+This document defines the first MCP tool contract for document retrieval. The
+current Django backend implements this boundary as an in-process
+`search_documents` wrapper around the OpenSearch-backed RAG retrieval path
+without changing the Django UI or the `/ask/` response shape.
 
 ## Design Goals
 
@@ -283,6 +283,14 @@ When MCP is disabled or unavailable and fallback is configured, the backend
 should keep using the current direct retrieval path in `documents/rag.py`. The
 UI should not know which retrieval path was used.
 
+The validated OpenShift configuration enables MCP retrieval and disables
+fallback during testing:
+
+```yaml
+MCP_RETRIEVAL_ENABLED: "True"
+MCP_RETRIEVAL_FALLBACK_ENABLED: "False"
+```
+
 ## Candidate Future Tools
 
 These tools are intentionally out of scope for the first contract, but the names
@@ -295,13 +303,15 @@ are reserved as likely follow-ups:
 | `compare_documents` | Retrieve comparison context across two or more accessible documents. |
 | `list_document_facets` | Return available metadata facets for search filters. |
 
-## Implementation Notes For #28
+## Implementation Notes
 
-- Start by wrapping the existing `retrieve_question_context()` behavior.
-- Keep the first implementation backend-only; do not call MCP directly from the
+- The current implementation wraps the existing `retrieve_question_context()`
+  behavior.
+- Keep the implementation backend-only; do not call MCP directly from the
   frontend.
-- Prefer `MCP_RETRIEVAL_ENABLED=false` by default until #29 wires the backend
-  feature flag and fallback behavior.
+- Use `MCP_RETRIEVAL_FALLBACK_ENABLED=false` during validation so retrieval
+  issues are visible. Use fallback only when operational continuity is more
+  important than surfacing MCP-specific errors.
 - Use existing settings where possible: `AI_RAG_TOP_K`,
   `AI_RAG_MAX_CONTEXT_CHARS`, `AI_RAG_MIN_RETRIEVAL_SCORE`,
   `BEDROCK_EMBED_MODEL_ID`, `OPENSEARCH_CHUNK_INDEX`, and

@@ -29,6 +29,8 @@ flowchart TB
             OpenSearch[OpenSearch Container\nport 9200]
         end
 
+        MCP[MCP Retrieval Boundary\ninside document-app]
+
         Media[(Media PVC)]
         DBPVC[(PostgreSQL PVC)]
         SearchPVC[(OpenSearch PVC)]
@@ -43,7 +45,9 @@ flowchart TB
         Web --> DB
         Web --> Media
         DB --> DBPVC
-        Web --> OpenSearch
+        Web --> MCP
+        MCP --> OpenSearch
+        MCP --> DB
         OpenSearch --> SearchPVC
         Ollama --> ModelPVC
         Web --> Ollama
@@ -69,6 +73,7 @@ flowchart TB
 | Secret | Stores database credentials, Okta secrets, Gemini API keys, AWS credentials, and sensitive values. |
 | Init Container | Waits for the configured database and runs Django migrations before startup. |
 | document-app | Main Django application container running under Gunicorn. |
+| MCP Retrieval Boundary | Backend retrieval wrapper used by Ask Documents before Nova Lite answer generation. |
 | PostgreSQL | Active persistent relational database service. |
 | OpenSearch | Derived document/chunk retrieval index for keyword and vector search. |
 | ollama | Optional local AI inference service. |
@@ -133,6 +138,8 @@ non-secret settings in the OpenShift ConfigMap or EC2 environment:
 | AI_RAG_MAX_ANSWER_TOKENS | 700 | Maximum answer tokens requested from Bedrock Nova Lite. |
 | AI_RAG_MIN_CONTEXT_CHARS | 80 | Minimum combined retrieved context required before answer generation. |
 | AI_RAG_MIN_RETRIEVAL_SCORE | 0 | Optional OpenSearch score floor for retrieved RAG chunks. |
+| MCP_RETRIEVAL_ENABLED | True | Routes Ask Documents retrieval through the MCP boundary. |
+| MCP_RETRIEVAL_FALLBACK_ENABLED | False | Disables direct retrieval fallback during MCP validation so failures are visible. |
 
 Do not hardcode AWS credentials in application code. Use normal AWS credential
 sources such as environment variables, OpenShift secrets, EC2 instance profiles,
@@ -233,7 +240,9 @@ flowchart LR
     OpenSearch[(OpenSearch Pod)] --> SearchPVC[(opensearch-pvc)]
     Django[Django Pod] --> MediaPVC[(docmanager-media-pvc)]
     Ollama[Ollama Pod] --> ModelPVC[(ollama-models-pvc)]
-    Django --> OpenSearch
+    Django --> MCP[MCP Retrieval Boundary]
+    MCP --> OpenSearch
+    MCP --> PostgreSQL
     Django --> Gemini[Google Gemini API]
     Django --> Bedrock[AWS Bedrock Nova Lite]
 ```

@@ -28,7 +28,9 @@ flowchart LR
     OpenShift --> Django[Django + Gunicorn]
 
     Django --> PostgreSQL[(PostgreSQL)]
-    Django --> OpenSearch[(OpenSearch)]
+    Django --> MCP[MCP Retrieval Boundary]
+    MCP --> OpenSearch[(OpenSearch)]
+    MCP --> PostgreSQL
     Django --> Storage[(Media PVC)]
 
     Django --> OCR[Tesseract OCR]
@@ -41,6 +43,7 @@ flowchart LR
     Django --> Embeddings[AWS Bedrock Titan Embeddings]
     Embeddings --> Chunks[(PostgreSQL DocumentChunk JSON embeddings)]
     Chunks --> OpenSearch
+    Django --> BedrockAnswer[AWS Bedrock Nova Lite Answers]
 ```
 
 ## Project Purpose
@@ -73,7 +76,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
 - Rebuild embeddings in batch with a Django management command.
 - Search documents by meaning through the AI Search page.
-- Ask document questions with retrieved chunk citations through the Ask Documents page.
+- Ask document questions with MCP-backed retrieved chunk citations through the Ask Documents page.
 - Bulk import local test documents through a Django management command.
 - Use synthetic Word, Excel, PDF, and OCR image samples from `test_documents/`.
 
@@ -94,9 +97,9 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | AI embeddings | AWS Bedrock Titan Text Embeddings V2 |
 | Search index | OpenSearch document and chunk indexes |
 | Semantic search | AWS Bedrock query embeddings with OpenSearch k-NN retrieval |
-| RAG Q&A | OpenSearch chunk retrieval with AWS Bedrock Nova Lite answer generation |
+| RAG Q&A | MCP retrieval boundary over OpenSearch chunks with AWS Bedrock Nova Lite answer generation |
 | Container platform | OpenShift CRC |
-| Container image | Docker Hub image `docker.io/khalique/document-app:1.7-rag` |
+| Container image | Docker Hub image `docker.io/khalique/document-app:1.9-mcp-observability` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -112,6 +115,7 @@ Browser
 Django
   -> document media PVC
   -> OpenSearch Service and OpenSearch PVC
+  -> MCP retrieval boundary for Ask Documents
   -> Ollama Service and Ollama model PVC
   -> Gemini API over HTTPS
   -> AWS Bedrock Nova Lite over HTTPS
@@ -120,7 +124,7 @@ Django
   -> OpenSearch document and chunk indexes
 ```
 
-The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval runs through OpenSearch; PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. Ollama remains available as a local/private metadata provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
+The Django application, PostgreSQL, and OpenSearch run as separate OpenShift deployments. PostgreSQL is the active metadata and system-of-record database with `DB_ENGINE=postgresql`. Semantic and vector retrieval uses OpenSearch, and Ask Documents now routes retrieval through the backend MCP boundary before Nova Lite answer generation. PostgreSQL stores canonical document metadata, workflow state, audit events, sessions, file references, chunk text, and JSON embedding data used for reindexing. The current application image supports PostgreSQL only. Uploaded documents live on the media PVC. Ollama remains available as a local/private metadata provider and serves the local model over the internal OpenShift service name `http://ollama:11434`. Gemini and AWS Bedrock Nova Lite are external metadata provider options. AWS Bedrock Titan Text Embeddings V2 is used for semantic search embeddings.
 
 ## Database Backend
 
@@ -258,8 +262,41 @@ Open the RAG document Q&A page:
 For a learning-focused walkthrough of the RAG call flow, model roles, prompt
 construction, and citation handling, see
 [`docs/rag-question-answering.md`](docs/rag-question-answering.md).
-For the planned MCP boundary around the same retrieval path, see
+For the active MCP boundary around the same retrieval path, see
 [`docs/mcp-retrieval-contract.md`](docs/mcp-retrieval-contract.md).
+
+## MCP Retrieval Validation
+
+The OpenShift MCP runtime uses `docker.io/khalique/document-app:1.9-mcp-observability` with
+`MCP_RETRIEVAL_ENABLED=True`. During validation, fallback is disabled so MCP
+retrieval failures are visible instead of silently using the direct path.
+
+Verify the running image and flags:
+
+```powershell
+oc get deployment document-app -o jsonpath="{.spec.template.spec.containers[0].image}{'\n'}"
+oc exec deployment/document-app -- python manage.py shell -c "from django.conf import settings; print(settings.MCP_RETRIEVAL_ENABLED, settings.MCP_RETRIEVAL_FALLBACK_ENABLED)"
+```
+
+Run the MCP retrieval health check:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval
+```
+
+Use `--skip-live` to verify settings without calling Bedrock or OpenSearch.
+Use `--json` to print the raw MCP response for a live smoke test.
+
+You can also call the MCP tool wrapper directly:
+
+```powershell
+oc exec deployment/document-app -- python manage.py shell -c "from documents.mcp_retrieval import search_documents; import json; result=search_documents({'query':'When does health coverage start?','user_context':{'roles':['viewer']},'options':{'max_results':3},'trace':{'request_id':'manual-mcp-smoke'}}); print(json.dumps(result, indent=2, default=str))"
+```
+
+If the response is `permission_context_missing`, include a viewer/loader/admin
+role or group in `user_context`. If it is `retrieval_unavailable`, check
+OpenSearch and rebuild indexes. If it is `embedding_provider_error`, check AWS
+Bedrock credentials, model access, and region.
 
 Example semantic queries:
 

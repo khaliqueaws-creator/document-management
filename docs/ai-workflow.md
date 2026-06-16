@@ -191,9 +191,12 @@ flowchart TB
     Chunk --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Store[DocumentChunk JSON embeddings]
     Query[User AI search query] --> QueryEmbedding[Query embedding]
+    AskQuery[Ask Documents question] --> MCP[MCP retrieval boundary]
+    MCP --> RAGEmbedding[RAG question embedding]
     Store --> Index[OpenSearch chunk vector index]
     QueryEmbedding --> Search[OpenSearch vector retrieval]
     Index --> Search
+    RAGEmbedding --> Search
     Search --> Hydrate[Hydrate PostgreSQL Documents]
     Hydrate --> Results[Ranked document results]
     Hydrate --> RAGPrompt[Grounded Q&A prompt]
@@ -208,20 +211,21 @@ OpenSearch, hydrates final document records from PostgreSQL, and returns ranked
 document results through the Django UI.
 
 The Ask Documents page uses the same retrieved and hydrated chunks as grounded
-context for document question answering. AWS Bedrock Titan creates query
-embeddings, OpenSearch retrieves matching chunks, and AWS Bedrock Nova Lite
-generates the answer. Answers include citations that link back to source
-`Document` records. Retrieved chunks are hydrated through the current
-request's accessible PostgreSQL `Document` queryset before they are included in
-the prompt. Empty or low-context retrieval returns a clear no-context answer
-instead of asking the model to guess.
+context for document question answering. Django routes retrieval through the
+MCP `search_documents` boundary, AWS Bedrock Titan creates query embeddings,
+OpenSearch retrieves matching chunks, and AWS Bedrock Nova Lite generates the
+answer after MCP returns structured context. Answers include citations that link
+back to source `Document` records. Retrieved chunks are hydrated through the
+current request's accessible PostgreSQL `Document` queryset before they are
+included in the prompt. Empty or low-context retrieval returns a clear
+no-context answer instead of asking the model to guess.
 
 ## Current AI Design Decisions
 
 - Gemini is preferred when external API usage is acceptable.
 - AWS Bedrock Nova Lite is available when AWS-managed inference is preferred.
 - AWS Bedrock Titan Embeddings V2 powers semantic AI search when embeddings are available.
-- RAG document Q&A retrieves OpenSearch chunks first, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
+- RAG document Q&A uses the MCP retrieval boundary, retrieves OpenSearch chunks, hydrates them through the current user's accessible PostgreSQL documents, refuses low-context questions, then uses AWS Bedrock Nova Lite only after that boundary.
 - Ollama provides a local/private fallback.
 - qwen2.5:0.5b is currently used because it fits within CRC resource constraints.
 - AI suggestions are generated during upload when extracted text is available.

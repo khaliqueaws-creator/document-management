@@ -1332,6 +1332,7 @@ class RAGTests(SimpleTestCase):
         self.assertEqual(payload["query"], "What policy applies?")
         self.assertEqual(payload["options"]["max_results"], 3)
         self.assertEqual(payload["trace"]["source"], "answer_question")
+        self.assertTrue(payload["trace"]["request_id"])
         self.assertEqual(
             mock_mcp.call_args.kwargs["documents_queryset"],
             accessible_documents,
@@ -1366,6 +1367,31 @@ class RAGTests(SimpleTestCase):
             "What policy applies?",
             documents_queryset=accessible_documents,
         )
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=True,
+    )
+    @patch("documents.rag.retrieve_question_context")
+    @patch("documents.mcp_retrieval.search_documents")
+    def test_retrieve_answer_context_logs_mcp_fallback(
+        self,
+        mock_mcp,
+        mock_direct,
+    ):
+        mock_mcp.return_value = {
+            "status": "error",
+            "error": {"code": "retrieval_unavailable", "retryable": True},
+        }
+        mock_direct.return_value = [{"citation_id": 1}]
+
+        with self.assertLogs("documents.rag", level="WARNING") as logs:
+            retrieve_answer_context("What policy applies?", documents_queryset=Mock())
+
+        self.assertIn("path=fallback", "\n".join(logs.output))
+        self.assertIn("MCP retrieval failed: retrieval_unavailable", "\n".join(
+            logs.output
+        ))
 
     @override_settings(
         MCP_RETRIEVAL_ENABLED=True,
@@ -1428,17 +1454,20 @@ class MCPRetrievalTests(SimpleTestCase):
         ]
         accessible_documents = Mock()
 
-        response = mcp_search_documents(
-            {
-                "query": "When does coverage start?",
-                "user_context": {"roles": ["viewer"]},
-                "options": {"max_results": 1, "max_chunk_chars": 18},
-                "trace": {"request_id": "request-123"},
-            },
-            documents_queryset=accessible_documents,
-        )
+        with self.assertLogs("documents.mcp_retrieval", level="INFO") as logs:
+            response = mcp_search_documents(
+                {
+                    "query": "When does coverage start?",
+                    "user_context": {"roles": ["viewer"]},
+                    "options": {"max_results": 1, "max_chunk_chars": 18},
+                    "trace": {"request_id": "request-123"},
+                },
+                documents_queryset=accessible_documents,
+            )
 
         self.assertEqual(response["status"], "ok")
+        self.assertIn("mcp_retrieval status=ok", "\n".join(logs.output))
+        self.assertIn("request_id=request-123", "\n".join(logs.output))
         self.assertEqual(response["query"], "When does coverage start?")
         self.assertEqual(response["trace"]["request_id"], "request-123")
         self.assertEqual(response["summary"]["returned_count"], 1)
@@ -1461,12 +1490,14 @@ class MCPRetrievalTests(SimpleTestCase):
         )
 
     def test_search_documents_rejects_empty_query(self):
-        response = mcp_search_documents({
-            "query": " ",
-            "trace": {"request_id": "empty-request"},
-        })
+        with self.assertLogs("documents.mcp_retrieval", level="INFO") as logs:
+            response = mcp_search_documents({
+                "query": " ",
+                "trace": {"request_id": "empty-request"},
+            })
 
         self.assertEqual(response["status"], "error")
+        self.assertIn("code=invalid_request", "\n".join(logs.output))
         self.assertEqual(response["error"]["code"], "invalid_request")
         self.assertFalse(response["error"]["retryable"])
         self.assertEqual(response["trace"]["request_id"], "empty-request")
@@ -1569,3 +1600,72 @@ class MCPRetrievalTests(SimpleTestCase):
         self.assertEqual(response["error"]["code"], "permission_context_missing")
         self.assertFalse(response["error"]["retryable"])
         mock_retrieve.assert_not_called()
+
+
+class MCPRetrievalHealthCommandTests(SimpleTestCase):
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=False,
+        AI_RAG_TOP_K=5,
+        AI_RAG_MAX_CONTEXT_CHARS=1800,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.management.commands.health_mcp_retrieval.search_documents")
+    def test_health_mcp_retrieval_reports_ok_live_check(self, mock_search):
+        mock_search.return_value = {
+            "status": "ok",
+            "summary": {
+                "returned_count": 1,
+                "candidate_count": 1,
+                "empty_reason": "",
+            },
+        }
+        stdout = StringIO()
+
+        call_command("health_mcp_retrieval", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("mcp_settings=ok", output)
+        self.assertIn("mcp_live=ok status=ok returned_count=1", output)
+        payload = mock_search.call_args.args[0]
+        self.assertEqual(payload["user_context"]["roles"], ["viewer"])
+        self.assertEqual(payload["trace"]["source"], "health_mcp_retrieval")
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=False,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=True,
+        AI_RAG_TOP_K=5,
+        AI_RAG_MAX_CONTEXT_CHARS=1800,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    def test_health_mcp_retrieval_skip_live_reports_settings_warning(self):
+        stdout = StringIO()
+
+        call_command("health_mcp_retrieval", "--skip-live", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("mcp_settings=warn enabled=False", output)
+        self.assertIn("mcp_live=warn skipped live retrieval check", output)
+
+    @override_settings(
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=False,
+        AI_RAG_TOP_K=5,
+        AI_RAG_MAX_CONTEXT_CHARS=1800,
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+    )
+    @patch("documents.management.commands.health_mcp_retrieval.search_documents")
+    def test_health_mcp_retrieval_raises_on_error_response(self, mock_search):
+        mock_search.return_value = {
+            "status": "error",
+            "error": {
+                "code": "retrieval_unavailable",
+                "retryable": True,
+            },
+        }
+
+        with self.assertRaises(CommandError):
+            call_command("health_mcp_retrieval", stdout=StringIO())

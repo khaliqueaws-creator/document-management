@@ -2,7 +2,7 @@
 
 This document describes the current high-level architecture of the Intelligent Document Management Platform.
 
-The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. The planned backend MCP retrieval boundary is defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md).
+The platform is a Django-based document management and intelligent document processing application deployed on OpenShift CRC. It uses PostgreSQL for canonical document records, OpenSearch for derived search/vector/RAG retrieval, persistent volume storage for uploaded files, Okta OIDC for authentication, Tesseract for OCR, and switchable AI providers using Ollama, Gemini, or AWS Bedrock. Ask Documents retrieval runs through the backend MCP retrieval boundary defined in [MCP Document Retrieval Contract](mcp-retrieval-contract.md).
 
 ## Current OpenShift CRC Architecture
 
@@ -18,7 +18,9 @@ flowchart TB
     PostgreSQLSvc --> PostgreSQL[(PostgreSQL Pod)]
     PostgreSQL --> PostgreSQLPVC[(postgresql-pvc)]
 
-    App --> OpenSearchSvc[OpenSearch Service]
+    App --> MCP[MCP Retrieval Boundary]
+    MCP --> OpenSearchSvc[OpenSearch Service]
+    MCP --> PostgreSQLSvc
     OpenSearchSvc --> OpenSearch[(OpenSearch Pod)]
     OpenSearch --> OpenSearchPVC[(opensearch-pvc)]
 
@@ -46,6 +48,7 @@ flowchart TB
 | OpenShift Route | Routes external HTTP traffic to the document-app service. |
 | document-app Service | Exposes the Django application pod inside OpenShift. |
 | Django + Gunicorn | Hosts the application logic, templates, search, document Q&A, upload, OCR orchestration, AI metadata flow, and role-based access. |
+| MCP Retrieval Boundary | Wraps Ask Documents retrieval, applies request validation, permission context handling, PostgreSQL hydration, and structured retrieval errors. |
 | PostgreSQL Service / Pod | Stores canonical document metadata, extracted text, sessions, audit events, AI suggestion status, and chunk rebuild/debug data. |
 | postgresql-pvc | Persists PostgreSQL database files. |
 | OpenSearch Service / Pod | Stores derived document and chunk search records for keyword, vector, and RAG retrieval. |
@@ -86,7 +89,9 @@ flowchart TB
     DB --> Audit[Audit Events]
     DB --> SessionData[Session Data]
 
-    App --> Search[(OpenSearch)]
+    App --> MCP[MCP Retrieval Boundary]
+    MCP --> Search[(OpenSearch)]
+    MCP --> DB
     Search --> SearchDocs[Derived Document Index]
     Search --> SearchChunks[Derived Chunk Vector Index]
 
@@ -104,7 +109,8 @@ flowchart TB
     App --> Titan[AWS Bedrock Titan Embeddings V2]
     Titan --> Chunks
     Titan --> SearchChunks
-    SearchChunks --> RAGAnswer[AWS Bedrock Nova Lite RAG Answer]
+    SearchChunks --> MCP
+    MCP --> RAGAnswer[AWS Bedrock Nova Lite RAG Answer]
 ```
 
 ## Design Notes
@@ -114,6 +120,7 @@ flowchart TB
 - PostgreSQL `Document` records are the canonical source of truth for document metadata, lifecycle state, permissions, audit, and file locations.
 - OpenSearch records are derived from PostgreSQL data and can be rebuilt with `python manage.py reindex_opensearch --create-indexes`.
 - OpenSearch search hits are treated as candidate retrieval results only. Django hydrates final search results from PostgreSQL before rendering them to users.
+- Ask Documents uses the MCP retrieval boundary for structured retrieval responses and error handling before prompt construction.
 - Deleted or missing PostgreSQL documents are not shown even if stale OpenSearch records still exist.
 - AI suggestions are staged separately from official metadata until accepted by a Loader or Admin user.
 - Gemini is useful when external API processing is acceptable.
@@ -125,4 +132,4 @@ flowchart TB
 
 PostgreSQL owns all canonical document state. Upload, metadata edit, AI metadata accept/reject, delete, audit, and file access flows write or read PostgreSQL first. OpenSearch is updated afterward as a derived index. If OpenSearch is unavailable, the PostgreSQL document record remains valid and can be reindexed later.
 
-The Django app is the only end-user UI. OpenSearch Dashboards is useful for operational inspection, but application users never act directly on OpenSearch records. Search, AI Search, and Ask Documents use OpenSearch for retrieval, then Django validates and hydrates results from PostgreSQL before displaying document metadata, citations, or file links.
+The Django app is the only end-user UI. OpenSearch Dashboards is useful for operational inspection, but application users never act directly on OpenSearch records. Search and AI Search use OpenSearch for retrieval, then Django validates and hydrates results from PostgreSQL before displaying document metadata or file links. Ask Documents uses the MCP retrieval boundary over the same OpenSearch chunk index, hydrates citations from PostgreSQL, and only then builds the answer prompt.

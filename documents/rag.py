@@ -1,4 +1,7 @@
 import json
+import logging
+import time
+from uuid import uuid4
 
 import boto3
 from botocore.config import Config
@@ -9,6 +12,8 @@ from .embeddings import EmbeddingError, get_titan_embedding
 from .models import Document
 from .opensearch_indexing import get_chunk_index_name, get_opensearch_client
 
+
+logger = logging.getLogger(__name__)
 
 class RAGError(Exception):
     pass
@@ -128,6 +133,7 @@ def build_mcp_retrieval_payload(question):
             "include_document_metadata": True,
         },
         "trace": {
+            "request_id": str(uuid4()),
             "source": "answer_question",
         },
     }
@@ -168,12 +174,23 @@ def mcp_response_to_contexts(response, documents_queryset=None):
 def retrieve_question_context_via_mcp(question, documents_queryset=None):
     from .mcp_retrieval import search_documents as mcp_search_documents
 
+    start_time = time.perf_counter()
+    payload = build_mcp_retrieval_payload(question)
     response = mcp_search_documents(
-        build_mcp_retrieval_payload(question),
+        payload,
         documents_queryset=documents_queryset,
     )
+    duration_ms = int((time.perf_counter() - start_time) * 1000)
+    request_id = payload["trace"]["request_id"]
 
     if response.get("status") == "ok":
+        result_count = len(response.get("results") or [])
+        logger.info(
+            "rag_mcp status=ok request_id=%s duration_ms=%s results=%s",
+            request_id,
+            duration_ms,
+            result_count,
+        )
         return mcp_response_to_contexts(
             response,
             documents_queryset=documents_queryset,
@@ -181,24 +198,40 @@ def retrieve_question_context_via_mcp(question, documents_queryset=None):
 
     error = response.get("error") or {}
     code = error.get("code") or "internal_error"
+    logger.warning(
+        "rag_mcp status=error request_id=%s duration_ms=%s code=%s retryable=%s",
+        request_id,
+        duration_ms,
+        code,
+        error.get("retryable"),
+    )
     raise RAGError(f"MCP retrieval failed: {code}")
 
 
 def retrieve_answer_context(question, documents_queryset=None):
     if not settings.MCP_RETRIEVAL_ENABLED:
+        logger.info("rag_retrieval path=direct reason=mcp_disabled")
         return retrieve_question_context(
             question,
             documents_queryset=documents_queryset,
         )
 
     try:
+        logger.info(
+            "rag_retrieval path=mcp fallback_enabled=%s",
+            settings.MCP_RETRIEVAL_FALLBACK_ENABLED,
+        )
         return retrieve_question_context_via_mcp(
             question,
             documents_queryset=documents_queryset,
         )
-    except RAGError:
+    except RAGError as error:
         if not settings.MCP_RETRIEVAL_FALLBACK_ENABLED:
             raise
+        logger.warning(
+            "rag_retrieval path=fallback reason=mcp_error error=%s",
+            error,
+        )
         return retrieve_question_context(
             question,
             documents_queryset=documents_queryset,

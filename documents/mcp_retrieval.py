@@ -1,3 +1,6 @@
+import logging
+import time
+
 from django.conf import settings
 from django.urls import reverse
 
@@ -5,6 +8,8 @@ from .embeddings import EmbeddingError
 from .models import Document
 from .rag import RAGError, retrieve_question_context
 
+
+logger = logging.getLogger(__name__)
 
 ERROR_MESSAGES = {
     "invalid_request": "The retrieval request is invalid.",
@@ -46,6 +51,25 @@ def build_trace(request_id=""):
     if request_id:
         trace["request_id"] = request_id
     return trace
+
+
+def elapsed_ms(start_time):
+    return int((time.perf_counter() - start_time) * 1000)
+
+
+def log_retrieval_event(status, code, request_id, duration_ms, **fields):
+    logger.info(
+        "mcp_retrieval status=%s code=%s request_id=%s duration_ms=%s %s",
+        status,
+        code,
+        request_id or "",
+        duration_ms,
+        " ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if value is not None
+        ),
+    )
 
 
 def get_request_id(payload):
@@ -183,11 +207,18 @@ def build_ok_response(
 
 
 def search_documents(payload, documents_queryset=None):
+    start_time = time.perf_counter()
     payload = payload or {}
     request_id = get_request_id(payload)
     query = (payload.get("query") or "").strip()
 
     if not query:
+        log_retrieval_event(
+            "error",
+            "invalid_request",
+            request_id,
+            elapsed_ms(start_time),
+        )
         return build_error_response("invalid_request", request_id=request_id)
 
     user_context = payload.get("user_context") or {}
@@ -197,9 +228,21 @@ def search_documents(payload, documents_queryset=None):
         accessible_documents = get_accessible_documents_from_context(user_context)
 
     if accessible_documents is PERMISSION_DENIED:
+        log_retrieval_event(
+            "error",
+            "permission_denied",
+            request_id,
+            elapsed_ms(start_time),
+        )
         return build_error_response("permission_denied", request_id=request_id)
 
     if accessible_documents is None:
+        log_retrieval_event(
+            "error",
+            "permission_context_missing",
+            request_id,
+            elapsed_ms(start_time),
+        )
         return build_error_response(
             "permission_context_missing",
             request_id=request_id,
@@ -216,6 +259,13 @@ def search_documents(payload, documents_queryset=None):
             documents_queryset=accessible_documents,
         )
     except EmbeddingError:
+        log_retrieval_event(
+            "error",
+            "embedding_provider_error",
+            request_id,
+            elapsed_ms(start_time),
+            max_results=max_results,
+        )
         return build_error_response(
             "embedding_provider_error",
             request_id=request_id,
@@ -225,11 +275,38 @@ def search_documents(payload, documents_queryset=None):
         code = "retrieval_unavailable"
         if "timeout" in message or "timed out" in message:
             code = "retrieval_timeout"
+        log_retrieval_event(
+            "error",
+            code,
+            request_id,
+            elapsed_ms(start_time),
+            max_results=max_results,
+        )
         return build_error_response(code, request_id=request_id)
     except Exception:
+        logger.exception(
+            "mcp_retrieval status=error code=internal_error request_id=%s",
+            request_id or "",
+        )
+        log_retrieval_event(
+            "error",
+            "internal_error",
+            request_id,
+            elapsed_ms(start_time),
+            max_results=max_results,
+        )
         return build_error_response("internal_error", request_id=request_id)
 
     if not contexts:
+        log_retrieval_event(
+            "ok",
+            "empty",
+            request_id,
+            elapsed_ms(start_time),
+            max_results=max_results,
+            returned_count=0,
+            empty_reason="no_accessible_context",
+        )
         return build_ok_response(
             query,
             [],
@@ -239,6 +316,14 @@ def search_documents(payload, documents_queryset=None):
             max_chunk_chars=max_chunk_chars,
         )
 
+    log_retrieval_event(
+        "ok",
+        "success",
+        request_id,
+        elapsed_ms(start_time),
+        max_results=max_results,
+        returned_count=len(contexts),
+    )
     return build_ok_response(
         query,
         contexts,

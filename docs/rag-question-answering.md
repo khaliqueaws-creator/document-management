@@ -28,17 +28,18 @@ In this project:
 - Augmentation places those chunks into the model prompt as context.
 - Generation asks AWS Bedrock Nova Lite to answer using only that context.
 
-The current RAG implementation uses AWS Bedrock only:
+The current RAG implementation uses MCP-backed retrieval plus AWS Bedrock:
 
 | Step | Service |
 | --- | --- |
 | Document chunk embeddings | AWS Bedrock Titan Text Embeddings V2 |
 | Question embedding | AWS Bedrock Titan Text Embeddings V2 |
-| Vector retrieval | OpenSearch k-NN chunk index |
+| Retrieval boundary | MCP `search_documents` wrapper in the Django backend |
+| Vector retrieval | OpenSearch k-NN chunk index behind the MCP boundary |
 | Source of truth | PostgreSQL `Document` records |
 | Answer generation | AWS Bedrock Nova Lite |
 
-The planned MCP retrieval boundary is documented separately in
+The active MCP retrieval boundary is documented separately in
 [`mcp-retrieval-contract.md`](mcp-retrieval-contract.md). That contract wraps
 the retrieval step only; answer generation remains in the Django backend.
 
@@ -48,11 +49,13 @@ the retrieval step only; answer generation remains in the Django backend.
 User opens /ask/
   -> Django routes to ask_documents()
   -> answer_question(question)
-  -> retrieve_question_context(question)
+  -> retrieve_answer_context(question)
+  -> MCP search_documents payload
   -> get_titan_embedding(question)
   -> AWS Bedrock Titan returns a question vector
   -> OpenSearch k-NN searches document chunk vectors
   -> PostgreSQL hydrates matching Document records
+  -> MCP returns structured retrieval results
   -> build_rag_prompt(question, retrieved chunks)
   -> AWS Bedrock Nova Lite generates a grounded answer
   -> ask_documents.html renders answer and citations
@@ -86,12 +89,14 @@ into OpenSearch with a `knn_vector` field.
 
 When a user asks a question:
 
-1. The question is embedded with the same Titan model.
-2. OpenSearch compares the question vector to indexed chunk vectors.
-3. The top matching chunks are returned with `document_id`, chunk text, and
+1. Django builds an MCP `search_documents` request with the question and user context.
+2. The question is embedded with the same Titan model.
+3. OpenSearch compares the question vector to indexed chunk vectors.
+4. The top matching chunks are returned with `document_id`, chunk text, and
    scores.
-4. Django loads the matching PostgreSQL `Document` rows with
+5. Django loads the matching PostgreSQL `Document` rows with
    `Document.objects.in_bulk(...)`.
+6. The MCP wrapper returns a structured `ok` or `error` response to the RAG flow.
 
 OpenSearch helps find candidates, but PostgreSQL remains the final authority for
 document records.
@@ -196,8 +201,8 @@ AI_RAG_MAX_CONTEXT_CHARS: "1800"
 AI_RAG_MAX_ANSWER_TOKENS: "700"
 AI_RAG_MIN_CONTEXT_CHARS: "80"
 AI_RAG_MIN_RETRIEVAL_SCORE: "0"
-MCP_RETRIEVAL_ENABLED: "False"
-MCP_RETRIEVAL_FALLBACK_ENABLED: "True"
+MCP_RETRIEVAL_ENABLED: "True"
+MCP_RETRIEVAL_FALLBACK_ENABLED: "False"
 ```
 
 ## Failure Behavior
@@ -217,8 +222,18 @@ The same refusal is returned before calling Bedrock if the retrieved accessible
 chunks do not meet the minimum context length. This keeps low-context answers
 from turning into guesses.
 
-If Bedrock or OpenSearch fails, the Django view catches the error and shows a
-warning message instead of breaking document browsing or search.
+If Bedrock, OpenSearch, or MCP retrieval fails, the Django view catches the
+error and shows a warning message instead of breaking document browsing or
+search. With `MCP_RETRIEVAL_FALLBACK_ENABLED=False`, MCP failures remain visible
+for validation. With fallback enabled, Django can retry the older direct
+retrieval path.
+
+Operators can validate the MCP path from the app pod:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval
+oc exec deployment/document-app -- python manage.py health_mcp_retrieval --json
+```
 
 ## Why PostgreSQL Hydration Matters
 
@@ -243,6 +258,8 @@ The main implementation files are:
 | File | Role |
 | --- | --- |
 | `documents/rag.py` | Retrieval, prompt building, Bedrock answer generation |
+| `documents/mcp_retrieval.py` | MCP `search_documents` wrapper and structured retrieval responses |
+| `documents/management/commands/health_mcp_retrieval.py` | MCP settings and live retrieval health check |
 | `documents/views.py` | `/ask/` view and error handling |
 | `documents/templates/ask_documents.html` | Answer and citation UI |
 | `documents/embeddings.py` | Titan embedding generation and chunking |
@@ -253,7 +270,6 @@ The main implementation files are:
 
 Useful next steps for learning and production hardening:
 
-- MCP-backed retrieval using the documented `search_documents` contract
 - hybrid keyword plus vector retrieval
 - citation id validation after generation
 - streaming answers
