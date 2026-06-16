@@ -210,6 +210,39 @@ oc exec deployment/document-app -- python manage.py health_ai_search
 Use `--skip-bedrock` when you only want PostgreSQL and OpenSearch diagnostics
 without making a live AWS Bedrock embedding call.
 
+Run the combined document intelligence health check after deployment changes or
+credential updates:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_document_intelligence
+```
+
+This checks PostgreSQL document/chunk readiness, OpenSearch document and chunk
+indexes, Bedrock Titan embeddings, Bedrock Nova answer generation, MCP runtime
+flags, and configured request limits. Use `--skip-live` when you want to avoid
+live Bedrock calls.
+
+Known-good OpenShift output should end with no errors or warnings:
+
+```text
+runtime=ok aws_region=us-east-1 nova_model=amazon.nova-lite-v1:0 embed_model=amazon.titan-embed-text-v2:0 embedding_dimensions=1024 opensearch_url=http://opensearch:9200
+aws_credentials=ok access_key_configured=True secret_key_configured=True session_token_configured=False
+mcp=ok retrieval_enabled=True retrieval_fallback_enabled=False indexing_enabled=True
+limits=ok bedrock_timeout_seconds=90 opensearch_timeout_seconds=10 embedding_max_chars=2500 search_top_k=5 rag_top_k=5 rag_max_context_chars=1800 rag_max_answer_tokens=700 rag_min_context_chars=80
+postgres=ok documents=2170 chunks=1333
+postgres_embeddings=ok chunks_with_embeddings=1333 dimensions=1024
+opensearch=ok version=3.3.0
+opensearch_documents=ok index=docmanager-documents count=2170
+opensearch_chunks=ok index=docmanager-document-chunks count=1333
+bedrock_embedding=ok dimensions=1024
+bedrock_answer=ok non_empty=True model=amazon.nova-lite-v1:0
+summary=done errors=0 warnings=0
+```
+
+The document and chunk counts will vary by environment. The important signals
+are `mcp=ok`, matching PostgreSQL/OpenSearch counts for indexed records,
+successful Bedrock embedding and answer checks, and `summary=done errors=0`.
+
 Open the AI Search page:
 
 ```text

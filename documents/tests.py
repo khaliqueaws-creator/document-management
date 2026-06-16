@@ -1153,6 +1153,140 @@ class HealthAiSearchCommandTests(SimpleTestCase):
         self.assertIn("summary=done errors=1", output)
 
 
+class HealthDocumentIntelligenceCommandTests(SimpleTestCase):
+    @override_settings(
+        AWS_REGION="us-east-1",
+        BEDROCK_NOVA_MODEL_ID="amazon.nova-lite-v1:0",
+        BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
+        BEDROCK_TIMEOUT_SECONDS=30,
+        AI_EMBEDDING_DIMENSIONS=1024,
+        AI_EMBEDDING_MAX_CHARS=2500,
+        AI_SEARCH_TOP_K=5,
+        AI_RAG_TOP_K=5,
+        AI_RAG_MAX_CONTEXT_CHARS=1800,
+        AI_RAG_MAX_ANSWER_TOKENS=700,
+        AI_RAG_MIN_CONTEXT_CHARS=80,
+        OPENSEARCH_URL="http://opensearch:9200",
+        OPENSEARCH_TIMEOUT_SECONDS=10,
+        OPENSEARCH_DOCUMENT_INDEX="docmanager-documents",
+        OPENSEARCH_CHUNK_INDEX="docmanager-document-chunks",
+        MCP_RETRIEVAL_ENABLED=True,
+        MCP_RETRIEVAL_FALLBACK_ENABLED=False,
+        MCP_INDEXING_ENABLED=True,
+    )
+    @patch.dict(
+        "os.environ",
+        {
+            "AWS_ACCESS_KEY_ID": "test-key",
+            "AWS_SECRET_ACCESS_KEY": "test-secret",
+        },
+    )
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "generate_answer_with_bedrock"
+    )
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "get_titan_embedding"
+    )
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "get_opensearch_client"
+    )
+    @patch("documents.management.commands.health_document_intelligence.DocumentChunk")
+    @patch("documents.management.commands.health_document_intelligence.Document")
+    def test_health_document_intelligence_reports_ok_status(
+        self,
+        mock_document,
+        mock_document_chunk,
+        mock_get_client,
+        mock_embedding,
+        mock_answer,
+    ):
+        mock_document.objects.count.return_value = 7
+        embedded_chunks = MagicMock()
+        embedded_chunks.count.return_value = 9
+        embedded_chunks.iterator.return_value = iter([
+            Mock(embedding=[0.2] * 1024),
+            Mock(embedding=[0.3] * 1024),
+        ])
+        mock_document_chunk.objects.count.return_value = 9
+        mock_document_chunk.objects.exclude.return_value.filter.return_value = (
+            embedded_chunks
+        )
+
+        client = Mock()
+        client.info.return_value = {"version": {"number": "3.3.0"}}
+        client.indices.exists.side_effect = [True, True]
+        client.count.side_effect = [{"count": 7}, {"count": 9}]
+        mock_get_client.return_value = client
+        mock_embedding.return_value = [0.1] * 1024
+        mock_answer.return_value = "ok"
+        stdout = StringIO()
+
+        call_command("health_document_intelligence", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("runtime=ok", output)
+        self.assertIn("limits=ok", output)
+        self.assertIn("mcp=ok retrieval_enabled=True", output)
+        self.assertIn("postgres=ok documents=7 chunks=9", output)
+        self.assertIn("postgres_embeddings=ok chunks_with_embeddings=9", output)
+        self.assertIn("opensearch=ok version=3.3.0", output)
+        self.assertIn("bedrock_embedding=ok dimensions=1024", output)
+        self.assertIn("bedrock_answer=ok non_empty=True", output)
+        self.assertIn("summary=done errors=0 warnings=0", output)
+
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "generate_answer_with_bedrock"
+    )
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "get_titan_embedding"
+    )
+    @patch(
+        "documents.management.commands.health_document_intelligence."
+        "get_opensearch_client"
+    )
+    @patch("documents.management.commands.health_document_intelligence.DocumentChunk")
+    @patch("documents.management.commands.health_document_intelligence.Document")
+    def test_health_document_intelligence_reports_answer_failures(
+        self,
+        mock_document,
+        mock_document_chunk,
+        mock_get_client,
+        mock_embedding,
+        mock_answer,
+    ):
+        mock_document.objects.count.return_value = 1
+        embedded_chunks = MagicMock()
+        embedded_chunks.count.return_value = 1
+        embedded_chunks.iterator.return_value = iter([
+            Mock(embedding=[0.2] * 1024),
+        ])
+        mock_document_chunk.objects.count.return_value = 1
+        mock_document_chunk.objects.exclude.return_value.filter.return_value = (
+            embedded_chunks
+        )
+
+        client = Mock()
+        client.info.return_value = {"version": {"number": "3.3.0"}}
+        client.indices.exists.side_effect = [True, True]
+        client.count.side_effect = [{"count": 1}, {"count": 1}]
+        mock_get_client.return_value = client
+        mock_embedding.return_value = [0.1] * 1024
+        mock_answer.side_effect = RAGError("Unable to reach Bedrock")
+        stdout = StringIO()
+
+        with self.assertRaises(CommandError):
+            call_command("health_document_intelligence", stdout=stdout)
+
+        output = stdout.getvalue()
+        self.assertIn("bedrock_answer=error failed=Unable to reach Bedrock", output)
+        self.assertIn("summary=done errors=1", output)
+
+
 class SemanticSearchTests(SimpleTestCase):
     def test_cosine_similarity_scores_matching_vectors(self):
         self.assertEqual(cosine_similarity([1, 0], [1, 0]), 1.0)

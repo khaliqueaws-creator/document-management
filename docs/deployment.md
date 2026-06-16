@@ -188,6 +188,48 @@ oc exec deployment/document-app -- python manage.py rebuild_embeddings --limit 5
 Successful output should show documents processed with chunks created. Errors
 are printed per document and do not stop the entire batch.
 
+Run the combined document intelligence health check after deployment or
+credential changes:
+
+```powershell
+oc exec deployment/document-app -- python manage.py health_document_intelligence
+```
+
+This reports PostgreSQL document/chunk readiness, OpenSearch document and chunk
+index counts, Bedrock Titan embedding access, Bedrock Nova answer access, MCP
+retrieval/indexing flags, and configured request limits. Use `--skip-live` when
+you want to avoid live Bedrock calls and only verify settings, database, and
+OpenSearch state.
+
+Known-good OpenShift output should look like this, with environment-specific
+document and chunk counts:
+
+```text
+runtime=ok aws_region=us-east-1 nova_model=amazon.nova-lite-v1:0 embed_model=amazon.titan-embed-text-v2:0 embedding_dimensions=1024 opensearch_url=http://opensearch:9200
+aws_credentials=ok access_key_configured=True secret_key_configured=True session_token_configured=False
+mcp=ok retrieval_enabled=True retrieval_fallback_enabled=False indexing_enabled=True
+limits=ok bedrock_timeout_seconds=90 opensearch_timeout_seconds=10 embedding_max_chars=2500 search_top_k=5 rag_top_k=5 rag_max_context_chars=1800 rag_max_answer_tokens=700 rag_min_context_chars=80
+postgres=ok documents=2170 chunks=1333
+postgres_embeddings=ok chunks_with_embeddings=1333 dimensions=1024
+opensearch=ok version=3.3.0
+opensearch_documents=ok index=docmanager-documents count=2170
+opensearch_chunks=ok index=docmanager-document-chunks count=1333
+bedrock_embedding=ok dimensions=1024
+bedrock_answer=ok non_empty=True model=amazon.nova-lite-v1:0
+summary=done errors=0 warnings=0
+```
+
+Interpret the result as follows:
+
+- `mcp=ok` proves MCP retrieval and indexing are enabled in the running app.
+- `postgres_embeddings=ok` proves stored chunk embeddings match the configured
+  Titan embedding dimension.
+- `opensearch_documents=ok` and `opensearch_chunks=ok` prove the derived search
+  indexes are reachable and populated.
+- `bedrock_embedding=ok` proves Titan embedding calls work.
+- `bedrock_answer=ok` proves Nova Lite answer generation works.
+- `summary=done errors=0 warnings=0` is the deployment-ready signal.
+
 ## Database Backend
 
 The current application image supports PostgreSQL only. `DB_ENGINE` should be
@@ -274,10 +316,11 @@ write and read paths are healthy.
 
    ```powershell
    oc exec deployment/document-app -c document-app -- printenv MCP_INDEXING_ENABLED
+   oc exec deployment/document-app -c document-app -- python manage.py health_document_intelligence --skip-live
    oc exec deployment/document-app -c document-app -- python manage.py shell -c "from documents.embeddings import get_titan_embedding; print(len(get_titan_embedding('hello world')))"
    ```
 
-   Expected values are `True` and `1024`.
+   Expected values include `True`, `summary=done`, and `1024`.
 
 2. Copy test documents into `/tmp` on the running pod:
 
