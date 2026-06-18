@@ -111,11 +111,13 @@ def store_ai_metadata_suggestions(document):
     document.ai_suggestion_status = Document.AI_STATUS_PENDING
     document.ai_metadata_provider = provider
     document.ai_error = ""
+    document.ai_explanation = {}
     document.save(
         update_fields=[
             "ai_suggestion_status",
             "ai_metadata_provider",
             "ai_error",
+            "ai_explanation",
         ]
     )
 
@@ -127,6 +129,7 @@ def store_ai_metadata_suggestions(document):
     document.ai_department = suggestions["department"]
     document.ai_tags = suggestions["tags"]
     document.ai_summary = suggestions["summary"]
+    document.ai_explanation = suggestions.get("explanation") or {}
     document.ai_suggestion_status = Document.AI_STATUS_SUGGESTED
     document.ai_suggested_at = timezone.now()
     document.ai_error = ""
@@ -136,6 +139,7 @@ def store_ai_metadata_suggestions(document):
             "ai_department",
             "ai_tags",
             "ai_summary",
+            "ai_explanation",
             "ai_metadata_provider",
             "ai_suggestion_status",
             "ai_suggested_at",
@@ -884,6 +888,13 @@ def accept_ai_metadata(request, document_id):
         AuditEvent.ACTION_EDIT,
         {
             "source": "ai_metadata_accept",
+            "ai_suggestion": {
+                "document_type": document.ai_document_type,
+                "department": document.ai_department,
+                "tags": document.ai_tags,
+                "summary": document.ai_summary,
+                "explanation": document.ai_explanation,
+            },
             "before": before_metadata,
             "after": get_document_audit_metadata(document),
         },
@@ -904,9 +915,25 @@ def reject_ai_metadata(request, document_id):
     except Document.DoesNotExist:
         raise Http404("Document not found")
 
+    rejected_suggestion = {
+        "document_type": document.ai_document_type,
+        "department": document.ai_department,
+        "tags": document.ai_tags,
+        "summary": document.ai_summary,
+        "explanation": document.ai_explanation,
+    }
     document.ai_suggestion_status = Document.AI_STATUS_REJECTED
     document.save(update_fields=["ai_suggestion_status"])
     document.refresh_from_db()
+    record_audit_event(
+        request,
+        document,
+        AuditEvent.ACTION_EDIT,
+        {
+            "source": "ai_metadata_reject",
+            "ai_suggestion": rejected_suggestion,
+        },
+    )
     try_reindex_document(request, document)
     messages.info(request, "AI suggestions rejected.")
 

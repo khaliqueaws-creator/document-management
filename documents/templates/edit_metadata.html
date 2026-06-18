@@ -62,18 +62,38 @@
         </div>
 
         {% if document.ai_suggestion_status == "suggested" or document.ai_suggestion_status == "accepted" or document.ai_suggestion_status == "rejected" %}
-            <dl class="metadata-list compact-metadata-list">
-                <dt>Provider</dt>
-                <dd>{{ document.get_ai_metadata_provider_display|default:active_ai_metadata_provider_label }}</dd>
-                <dt>Document Type</dt>
-                <dd>{{ document.ai_document_type|default:"-" }}</dd>
-                <dt>Department</dt>
-                <dd>{{ document.ai_department|default:"-" }}</dd>
-                <dt>Tags</dt>
-                <dd>{{ document.ai_tags|default:"-" }}</dd>
-                <dt>Summary</dt>
-                <dd>{{ document.ai_summary|default:"-" }}</dd>
-            </dl>
+            <p class="muted-text ai-provider-line">
+                Provider: {{ document.get_ai_metadata_provider_display|default:active_ai_metadata_provider_label }}
+            </p>
+
+            <div class="ai-explanation-list">
+                {% for item in document.ai_explanation_items %}
+                <section class="ai-explanation-item">
+                    <div class="ai-explanation-heading">
+                        <h4>{{ item.label }}</h4>
+                        {% if item.confidence %}
+                        <span class="confidence-pill confidence-{{ item.confidence }}">
+                            {{ item.confidence|capfirst }} confidence
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    <p class="ai-suggested-value">{{ item.value }}</p>
+
+                    {% if item.reason %}
+                    <p class="ai-reason">
+                        <strong>Why:</strong> {{ item.reason }}
+                    </p>
+                    {% endif %}
+
+                    {% if item.evidence %}
+                    <blockquote class="ai-evidence">
+                        {{ item.evidence }}
+                    </blockquote>
+                    {% endif %}
+                </section>
+                {% endfor %}
+            </div>
 
             {% if document.ai_suggested_at %}
             <p class="muted-text">

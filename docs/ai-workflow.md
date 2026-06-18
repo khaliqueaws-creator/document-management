@@ -106,6 +106,51 @@ The application stores AI-generated metadata separately from official metadata.
 | ai_suggestion_status | Tracks review state |
 | ai_suggested_at | Timestamp of generation |
 | ai_error | Error information if generation fails |
+| ai_explanation | Field-level confidence, reason, and source evidence stored as JSON |
+
+## AI Metadata Confidence And Explainability
+
+Bedrock metadata responses include a qualitative confidence indicator, a short
+reason, and a supporting document excerpt for document type, department, tags,
+and summary.
+
+```text
+Suggested Value
+     |
+     +--> High / Medium / Low confidence
+     |
+     +--> Short reason
+     |
+     +--> Matching source excerpt
+     |
+     v
+Human Accepts, Edits, Or Rejects
+```
+
+Confidence is a review indicator, not a guaranteed probability. The
+application accepts only `high`, `medium`, or `low`; unsupported values are not
+displayed. Supporting evidence is displayed only when it can be matched back to
+the extracted document text after whitespace normalization. Unmatched evidence
+is removed and the field is downgraded to low confidence.
+
+Explainability remains separate from official metadata. Accept and reject
+actions retain the reviewed AI suggestion and explanation in the audit event.
+
+### Validated OpenShift Flow
+
+The feature was validated with
+`docker.io/khalique/document-app:2.4-ai-explainability`.
+
+Validation confirmed:
+
+- migration `0012_document_ai_explanation` applied successfully
+- Regenerate produced confidence, reason, and matching evidence
+- Accept copied suggestions into official metadata
+- Reject retained the reviewed suggestion in audit context
+- the existing upload and metadata review workflow remained functional
+
+Existing suggestions created before migration `0012` may not include
+explanations. Use Regenerate to create the structured explainability response.
 
 ## Human Review Design
 

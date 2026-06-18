@@ -1,4 +1,5 @@
 import json
+import re
 
 import boto3
 import requests
@@ -19,10 +20,30 @@ Extract metadata from the document text.
 
 Return only valid JSON with these fields:
 {{
-  "document_type": "",
-  "department": "",
-  "tags": "",
-  "summary": ""
+  "document_type": {{
+    "value": "",
+    "confidence": "high|medium|low",
+    "reason": "",
+    "evidence": ""
+  }},
+  "department": {{
+    "value": "",
+    "confidence": "high|medium|low",
+    "reason": "",
+    "evidence": ""
+  }},
+  "tags": {{
+    "value": "",
+    "confidence": "high|medium|low",
+    "reason": "",
+    "evidence": ""
+  }},
+  "summary": {{
+    "value": "",
+    "confidence": "high|medium|low",
+    "reason": "",
+    "evidence": ""
+  }}
 }}
 
 Rules:
@@ -32,6 +53,10 @@ Rules:
 - summary should be one or two sentences.
 - Do not invent facts not supported by the text.
 - If the text is unclear, use "Other" for document_type or department.
+- confidence must be high, medium, or low. It is an indicator, not a percentage.
+- reason must briefly explain why the value was suggested.
+- evidence must be a short verbatim excerpt from the supplied document text.
+- Use low confidence and an empty evidence value when the text does not directly support a suggestion.
 
 Document text:
 {text}
@@ -48,6 +73,32 @@ def clean_suggestion_value(value, max_length=None):
         return value[:max_length].rstrip()
 
     return value
+
+
+def clean_confidence(value):
+    value = clean_suggestion_value(value, 20).lower()
+    return value if value in {"high", "medium", "low"} else ""
+
+
+def parse_suggestion_field(parsed, field_name, max_length=None):
+    raw_value = parsed.get(field_name)
+
+    if isinstance(raw_value, dict):
+        value = clean_suggestion_value(raw_value.get("value"), max_length)
+        explanation = {
+            "confidence": clean_confidence(raw_value.get("confidence")),
+            "reason": clean_suggestion_value(raw_value.get("reason"), 500),
+            "evidence": clean_suggestion_value(raw_value.get("evidence"), 500),
+        }
+    else:
+        value = clean_suggestion_value(raw_value, max_length)
+        explanation = {
+            "confidence": "",
+            "reason": "",
+            "evidence": "",
+        }
+
+    return value, explanation
 
 
 def load_metadata_json_object(response_text):
@@ -88,21 +139,53 @@ def parse_metadata_json_response(response_text):
             "AI provider response was not a JSON object."
         )
 
+    document_type, document_type_explanation = parse_suggestion_field(
+        parsed,
+        "document_type",
+        100,
+    )
+    department, department_explanation = parse_suggestion_field(
+        parsed,
+        "department",
+        100,
+    )
+    tags, tags_explanation = parse_suggestion_field(parsed, "tags", 255)
+    summary, summary_explanation = parse_suggestion_field(parsed, "summary")
+
     return {
-        "document_type": clean_suggestion_value(
-            parsed.get("document_type"),
-            100,
-        ),
-        "department": clean_suggestion_value(
-            parsed.get("department"),
-            100,
-        ),
-        "tags": clean_suggestion_value(
-            parsed.get("tags"),
-            255,
-        ),
-        "summary": clean_suggestion_value(parsed.get("summary")),
+        "document_type": document_type,
+        "department": department,
+        "tags": tags,
+        "summary": summary,
+        "explanation": {
+            "document_type": document_type_explanation,
+            "department": department_explanation,
+            "tags": tags_explanation,
+            "summary": summary_explanation,
+        },
     }
+
+
+def normalize_evidence_text(value):
+    return re.sub(r"\s+", " ", (value or "")).strip().lower()
+
+
+def validate_explanation_evidence(suggestions, source_text):
+    normalized_source = normalize_evidence_text(source_text)
+    explanation = suggestions.get("explanation") or {}
+
+    for details in explanation.values():
+        if not isinstance(details, dict):
+            continue
+
+        evidence = details.get("evidence") or ""
+        normalized_evidence = normalize_evidence_text(evidence)
+
+        if normalized_evidence and normalized_evidence not in normalized_source:
+            details["evidence"] = ""
+            details["confidence"] = "low"
+
+    return suggestions
 
 
 def build_provider_error_message(provider_name, response):
@@ -212,7 +295,10 @@ def suggest_metadata_with_ollama(text):
 
     response_text = payload.get("response", "")
 
-    return parse_metadata_json_response(response_text)
+    return validate_explanation_evidence(
+        parse_metadata_json_response(response_text),
+        text,
+    )
 
 
 def suggest_metadata_with_gemini(text):
@@ -269,7 +355,10 @@ def suggest_metadata_with_gemini(text):
             "Gemini returned a non-JSON API response."
         ) from error
 
-    return parse_metadata_json_response(parse_gemini_response_text(payload))
+    return validate_explanation_evidence(
+        parse_metadata_json_response(parse_gemini_response_text(payload)),
+        text,
+    )
 
 
 def suggest_metadata_with_bedrock(text):
@@ -329,7 +418,10 @@ def suggest_metadata_with_bedrock(text):
             "Bedrock returned a non-JSON API response."
         ) from error
 
-    return parse_metadata_json_response(parse_bedrock_response_text(payload))
+    return validate_explanation_evidence(
+        parse_metadata_json_response(parse_bedrock_response_text(payload)),
+        text,
+    )
 
 
 def suggest_metadata(text):

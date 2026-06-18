@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
         - name: migrate
-          image: docker.io/khalique/document-app:2.3-health-checks
+          image: docker.io/khalique/document-app:2.4-ai-explainability
           command:
             - /bin/sh
             - -c
@@ -50,7 +50,7 @@ spec:
               mountPath: /app/media
       containers:
         - name: document-app
-          image: docker.io/khalique/document-app:2.3-health-checks
+          image: docker.io/khalique/document-app:2.4-ai-explainability
           command:
             - gunicorn
             - docmanager.wsgi:application

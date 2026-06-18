@@ -72,6 +72,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Authenticate users through Okta OIDC.
 - Authorize access through Okta group-based application roles.
 - Generate AI metadata suggestions through AWS Bedrock Nova Lite.
+- Show field-level confidence, reasons, and source evidence for AI metadata suggestions.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
@@ -102,7 +103,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 | MCP indexing | Backend indexing boundary for upload/reprocess and bulk import |
 | RAG Q&A | MCP retrieval boundary over OpenSearch chunks with AWS Bedrock Nova Lite answer generation |
 | Container platform | OpenShift CRC |
-| Container image | Docker Hub image `docker.io/khalique/document-app:2.2-mcp-indexing-bulk` |
+| Container image | Docker Hub image `docker.io/khalique/document-app:2.4-ai-explainability` |
 | Public demo access | Cloudflare Tunnel |
 
 ## High-Level Architecture
@@ -267,7 +268,7 @@ For the active MCP boundary around chunking, embedding, and indexing, see
 
 ## MCP Retrieval Validation
 
-The OpenShift MCP runtime uses `docker.io/khalique/document-app:2.2-mcp-indexing-bulk`
+The OpenShift MCP runtime uses `docker.io/khalique/document-app:2.4-ai-explainability`
 with `MCP_RETRIEVAL_ENABLED=True` and `MCP_INDEXING_ENABLED=True`. During
 validation, retrieval fallback is disabled so MCP retrieval failures are visible
 instead of silently using the direct path.

@@ -17,6 +17,7 @@ from .ai_metadata import (
     suggest_metadata_with_bedrock,
     suggest_metadata_with_gemini,
     suggest_metadata_with_ollama,
+    validate_explanation_evidence,
 )
 from .embeddings import (
     EmbeddingError,
@@ -52,6 +53,7 @@ from .rag import (
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
 from .views import (
+    store_ai_metadata_suggestions,
     try_index_document_for_search,
     try_rebuild_document_embeddings,
     try_reindex_document,
@@ -113,6 +115,101 @@ class MetadataSuggestionTests(SimpleTestCase):
 
         self.assertEqual(suggestions["document_type"], "Report")
         self.assertEqual(suggestions["department"], "Operations")
+
+    def test_parse_metadata_json_response_returns_explainability(self):
+        suggestions = parse_metadata_json_response(
+            json.dumps({
+                "document_type": {
+                    "value": "Policy",
+                    "confidence": "HIGH",
+                    "reason": "The document defines employee coverage rules.",
+                    "evidence": "Employees are eligible for health coverage.",
+                },
+                "department": {
+                    "value": "HR",
+                    "confidence": "medium",
+                    "reason": "The text discusses employee benefits.",
+                    "evidence": "Eligible employees may enroll.",
+                },
+                "tags": {
+                    "value": "benefits, health, enrollment",
+                    "confidence": "medium",
+                    "reason": "These topics appear throughout the document.",
+                    "evidence": "Health coverage enrollment begins...",
+                },
+                "summary": {
+                    "value": "A policy describing employee health coverage.",
+                    "confidence": "low",
+                    "reason": "The available excerpt is brief.",
+                    "evidence": "",
+                },
+            })
+        )
+
+        self.assertEqual(suggestions["document_type"], "Policy")
+        self.assertEqual(
+            suggestions["explanation"]["document_type"]["confidence"],
+            "high",
+        )
+        self.assertIn(
+            "coverage rules",
+            suggestions["explanation"]["document_type"]["reason"],
+        )
+        self.assertEqual(
+            suggestions["explanation"]["department"]["evidence"],
+            "Eligible employees may enroll.",
+        )
+
+    def test_parse_metadata_json_response_rejects_unknown_confidence(self):
+        suggestions = parse_metadata_json_response(
+            json.dumps({
+                "document_type": {
+                    "value": "Policy",
+                    "confidence": "92 percent",
+                    "reason": "Policy language is present.",
+                    "evidence": "This policy applies...",
+                },
+            })
+        )
+
+        self.assertEqual(
+            suggestions["explanation"]["document_type"]["confidence"],
+            "",
+        )
+
+    def test_validate_explanation_evidence_downgrades_unmatched_excerpt(self):
+        suggestions = {
+            "explanation": {
+                "document_type": {
+                    "confidence": "high",
+                    "reason": "The document defines a policy.",
+                    "evidence": "This sentence was not in the document.",
+                },
+                "department": {
+                    "confidence": "medium",
+                    "reason": "The document discusses employee benefits.",
+                    "evidence": "Eligible employees may enroll.",
+                },
+            },
+        }
+
+        validate_explanation_evidence(
+            suggestions,
+            "Eligible employees\nmay enroll.",
+        )
+
+        self.assertEqual(
+            suggestions["explanation"]["document_type"]["confidence"],
+            "low",
+        )
+        self.assertEqual(
+            suggestions["explanation"]["document_type"]["evidence"],
+            "",
+        )
+        self.assertEqual(
+            suggestions["explanation"]["department"]["evidence"],
+            "Eligible employees may enroll.",
+        )
 
     def test_suggest_metadata_requires_extracted_text(self):
         with self.assertRaisesMessage(
@@ -259,6 +356,8 @@ class MetadataSuggestionTests(SimpleTestCase):
         prompt = body["messages"][0]["content"][0]["text"]
         self.assertIn("An operations report", prompt)
         self.assertNotIn("extra text beyond", prompt)
+        self.assertIn('"confidence": "high|medium|low"', prompt)
+        self.assertIn("short verbatim excerpt", prompt)
 
     @override_settings(AI_METADATA_PROVIDER="bedrock")
     @patch("documents.ai_metadata.suggest_metadata_with_bedrock")
@@ -278,6 +377,78 @@ class MetadataSuggestionTests(SimpleTestCase):
             "Unsupported AI metadata provider",
         ):
             suggest_metadata("Some document text")
+
+
+class MetadataExplainabilityTests(SimpleTestCase):
+    def test_document_explanation_items_are_ordered_for_review(self):
+        document = Document(
+            ai_document_type="Policy",
+            ai_department="HR",
+            ai_tags="benefits, health",
+            ai_summary="Employee health policy.",
+            ai_explanation={
+                "document_type": {
+                    "confidence": "high",
+                    "reason": "The text explicitly identifies a policy.",
+                    "evidence": "This employee health policy...",
+                },
+                "department": {
+                    "confidence": "medium",
+                    "reason": "The topic concerns employee benefits.",
+                    "evidence": "Eligible employees...",
+                },
+            },
+        )
+
+        items = document.ai_explanation_items
+
+        self.assertEqual(
+            [item["key"] for item in items],
+            ["document_type", "department", "tags", "summary"],
+        )
+        self.assertEqual(items[0]["confidence"], "high")
+        self.assertEqual(items[0]["value"], "Policy")
+        self.assertEqual(items[2]["confidence"], "")
+
+    @override_settings(AI_METADATA_PROVIDER="bedrock")
+    @patch("documents.views.timezone.now")
+    @patch("documents.views.suggest_metadata")
+    def test_store_ai_metadata_suggestions_persists_explanation(
+        self,
+        mock_suggest,
+        mock_now,
+    ):
+        suggested_at = Mock()
+        mock_now.return_value = suggested_at
+        mock_suggest.return_value = {
+            "document_type": "Policy",
+            "department": "HR",
+            "tags": "benefits, health",
+            "summary": "Employee health policy.",
+            "explanation": {
+                "document_type": {
+                    "confidence": "high",
+                    "reason": "The document calls itself a policy.",
+                    "evidence": "Employee Health Policy",
+                },
+            },
+        }
+        document = Mock(
+            extracted_text="Employee Health Policy",
+            ai_explanation={"stale": True},
+        )
+
+        store_ai_metadata_suggestions(document)
+
+        self.assertEqual(document.ai_document_type, "Policy")
+        self.assertEqual(document.ai_explanation["document_type"]["confidence"], "high")
+        self.assertEqual(document.ai_suggestion_status, "suggested")
+        self.assertEqual(document.ai_suggested_at, suggested_at)
+        self.assertEqual(document.save.call_count, 2)
+        self.assertIn(
+            "ai_explanation",
+            document.save.call_args_list[1].kwargs["update_fields"],
+        )
 
 
 class EmbeddingTests(SimpleTestCase):
@@ -934,16 +1105,31 @@ class SourceOfTruthViewFlowTests(SimpleTestCase):
         OKTA_GROUP_ADMIN="DocumentAdmin",
     )
     @patch("documents.views.messages.info")
+    @patch("documents.views.record_audit_event")
     @patch("documents.views.try_reindex_document")
     @patch("documents.views.Document.objects.get")
     def test_reject_ai_metadata_saves_postgres_before_reindexing(
         self,
         mock_get,
         mock_reindex,
+        mock_audit,
         mock_info,
     ):
         request = self.get_loader_request()
-        document = Mock(id=42)
+        document = Mock(
+            id=42,
+            ai_document_type="Policy",
+            ai_department="HR",
+            ai_tags="benefits",
+            ai_summary="Policy summary",
+            ai_explanation={
+                "document_type": {
+                    "confidence": "high",
+                    "reason": "The document identifies itself as a policy.",
+                    "evidence": "Employee Policy",
+                },
+            },
+        )
         call_order = []
         document.save.side_effect = lambda *args, **kwargs: call_order.append("save")
         document.refresh_from_db.side_effect = lambda: call_order.append("refresh")
@@ -956,6 +1142,15 @@ class SourceOfTruthViewFlowTests(SimpleTestCase):
         self.assertEqual(call_order, ["save", "refresh", "reindex"])
         document.save.assert_called_once_with(update_fields=["ai_suggestion_status"])
         mock_reindex.assert_called_once_with(request, document)
+        mock_audit.assert_called_once()
+        audit_metadata = mock_audit.call_args.args[3]
+        self.assertEqual(audit_metadata["source"], "ai_metadata_reject")
+        self.assertEqual(
+            audit_metadata["ai_suggestion"]["explanation"]["document_type"][
+                "confidence"
+            ],
+            "high",
+        )
         mock_info.assert_called_once()
 
 

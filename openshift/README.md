@@ -7,7 +7,7 @@ This runbook reflects the current implementation:
 - Django runs as `deployment/document-app` with Gunicorn.
 - PostgreSQL runs as `deployment/postgresql` and is the active database backend.
 - OpenSearch runs as `deployment/opensearch` and owns derived keyword/vector retrieval indexes.
-- The app image referenced by the manifests is `docker.io/khalique/document-app:1.9-mcp-observability`.
+- The app image referenced by the manifests is `docker.io/khalique/document-app:2.4-ai-explainability`.
 - Ask Documents retrieval uses the backend MCP boundary with `MCP_RETRIEVAL_ENABLED=True`.
 - MCP fallback is disabled in the checked-in OpenShift ConfigMap so validation failures are visible.
 - Ollama runs as `deployment/ollama` and is reached by Django at `http://ollama:11434`.
@@ -84,7 +84,7 @@ Current public URL values:
 The checked-in manifests reference the Docker Hub image:
 
 ```text
-docker.io/khalique/document-app:1.9-mcp-observability
+docker.io/khalique/document-app:2.4-ai-explainability
 ```
 
 If you are iterating locally, build and push a new tag before applying the
@@ -99,7 +99,7 @@ Then update both the init container and app container image references in
 `openshift/docmanager-deployment.yaml`.
 
 The current known-good image for the MCP-backed RAG document Q&A path is
-`docker.io/khalique/document-app:1.9-mcp-observability`.
+`docker.io/khalique/document-app:2.4-ai-explainability`.
 
 ### 4. Apply Resources
 
@@ -584,7 +584,7 @@ oc exec deployment/document-app -- python manage.py health_mcp_retrieval
 Expected image and flags:
 
 ```text
-docker.io/khalique/document-app:1.9-mcp-observability
+docker.io/khalique/document-app:2.4-ai-explainability
 True False
 ```
 

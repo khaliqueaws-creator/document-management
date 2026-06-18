@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
         - name: migrate
-          image: docker.io/khalique/document-app:1.9-mcp-observability
+          image: docker.io/khalique/document-app:2.4-ai-explainability
           command:
             - python
             - manage.py

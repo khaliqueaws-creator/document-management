@@ -66,6 +66,43 @@ class Document(models.Model):
     )
     ai_suggested_at = models.DateTimeField(null=True, blank=True)
     ai_error = models.TextField(blank=True)
+    ai_explanation = models.JSONField(default=dict, blank=True)
+
+    @property
+    def ai_explanation_items(self):
+        explanation = (
+            self.ai_explanation
+            if isinstance(self.ai_explanation, dict)
+            else {}
+        )
+        fields = [
+            ("document_type", "Document Type", self.ai_document_type),
+            ("department", "Department", self.ai_department),
+            ("tags", "Tags", self.ai_tags),
+            ("summary", "Summary", self.ai_summary),
+        ]
+        items = []
+
+        for key, label, value in fields:
+            details = explanation.get(key) or {}
+            if not isinstance(details, dict):
+                details = {}
+
+            confidence = str(details.get("confidence") or "").lower()
+            items.append({
+                "key": key,
+                "label": label,
+                "value": value or "-",
+                "confidence": (
+                    confidence
+                    if confidence in {"high", "medium", "low"}
+                    else ""
+                ),
+                "reason": details.get("reason") or "",
+                "evidence": details.get("evidence") or "",
+            })
+
+        return items
 
     def __str__(self):
         return self.file.name
