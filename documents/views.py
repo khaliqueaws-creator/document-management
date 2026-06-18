@@ -20,7 +20,13 @@ from .forms import (
 from .ai_metadata import MetadataSuggestionError, suggest_metadata
 from .embeddings import EmbeddingError, rebuild_document_embeddings
 from .mcp_indexing import index_document as mcp_index_document
-from .models import AuditEvent, Document, DocumentChunk
+from .metadata_quality import MetadataQualityError, review_document_metadata
+from .models import (
+    AuditEvent,
+    Document,
+    DocumentChunk,
+    MetadataQualityReview,
+)
 from .opensearch_indexing import (
     OpenSearchIndexingError,
     delete_document as delete_indexed_document,
@@ -95,6 +101,10 @@ def record_audit_event(request, document, action, metadata=None):
         actor_email=get_actor_email(request),
         metadata=metadata or get_document_audit_metadata(document),
     )
+
+
+def invalidate_metadata_quality_review(document):
+    MetadataQualityReview.objects.filter(document_id=document.id).delete()
 
 
 def get_ai_metadata_source_text(document):
@@ -753,6 +763,248 @@ def audit_events(request):
     })
 
 
+@okta_role_required(is_loader)
+def metadata_quality_dashboard(request):
+    active_filter = (request.GET.get("filter") or "all").strip().lower()
+    valid_filters = {
+        "all",
+        "critical",
+        "needs_review",
+        "good",
+        "excellent",
+        "unreviewed",
+        "failed",
+    }
+    if active_filter not in valid_filters:
+        active_filter = "all"
+
+    documents = list(Document.objects.order_by("-uploaded_at"))
+    reviews = {
+        review.document_id: review
+        for review in MetadataQualityReview.objects.all()
+    }
+    complete_reviews = [
+        review
+        for review in reviews.values()
+        if review.status == MetadataQualityReview.STATUS_COMPLETE
+    ]
+
+    rows = []
+    for document in documents:
+        review = reviews.get(document.id)
+        include = active_filter == "all"
+
+        if active_filter == "unreviewed":
+            include = review is None
+        elif active_filter == "failed":
+            include = (
+                review is not None
+                and review.status == MetadataQualityReview.STATUS_FAILED
+            )
+        elif active_filter in {
+            "critical",
+            "needs_review",
+            "good",
+            "excellent",
+        }:
+            include = (
+                review is not None
+                and review.status == MetadataQualityReview.STATUS_COMPLETE
+                and review.quality_level == active_filter
+            )
+
+        if include:
+            rows.append({
+                "document": document,
+                "review": review,
+            })
+
+    average_score = (
+        round(
+            sum(review.quality_score for review in complete_reviews)
+            / len(complete_reviews)
+        )
+        if complete_reviews
+        else None
+    )
+    level_counts = {
+        level: sum(
+            1
+            for review in complete_reviews
+            if review.quality_level == level
+        )
+        for level in (
+            MetadataQualityReview.LEVEL_EXCELLENT,
+            MetadataQualityReview.LEVEL_GOOD,
+            MetadataQualityReview.LEVEL_NEEDS_REVIEW,
+            MetadataQualityReview.LEVEL_CRITICAL,
+        )
+    }
+
+    paginator = Paginator(rows, settings.DOCUMENTS_PER_PAGE)
+    page_obj = paginator.get_page(request.GET.get("page"))
+
+    return render(request, "metadata_quality_dashboard.html", {
+        "rows": page_obj,
+        "page_obj": page_obj,
+        "active_filter": active_filter,
+        "total_documents": len(documents),
+        "reviewed_count": len(complete_reviews),
+        "unreviewed_count": sum(
+            1 for document in documents if document.id not in reviews
+        ),
+        "failed_count": sum(
+            1
+            for review in reviews.values()
+            if review.status == MetadataQualityReview.STATUS_FAILED
+        ),
+        "average_score": average_score,
+        "level_counts": level_counts,
+        "batch_limit": settings.AI_METADATA_QUALITY_BATCH_LIMIT,
+    })
+
+
+@okta_role_required(is_loader)
+def metadata_quality_detail(request, document_id):
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    try:
+        review = document.metadata_quality_review
+    except MetadataQualityReview.DoesNotExist:
+        review = None
+
+    return render(request, "metadata_quality_detail.html", {
+        "document": document,
+        "review": review,
+    })
+
+
+def perform_metadata_quality_review(request, document):
+    try:
+        result = review_document_metadata(document)
+    except MetadataQualityError as error:
+        MetadataQualityReview.objects.update_or_create(
+            document=document,
+            defaults={
+                "status": MetadataQualityReview.STATUS_FAILED,
+                "quality_score": 0,
+                "quality_level": "",
+                "review_summary": "",
+                "issues": [],
+                "model_id": settings.BEDROCK_NOVA_MODEL_ID,
+                "error": str(error),
+            },
+        )
+        return None, str(error)
+
+    review, _ = MetadataQualityReview.objects.update_or_create(
+        document=document,
+        defaults={
+            "status": MetadataQualityReview.STATUS_COMPLETE,
+            "quality_score": result["quality_score"],
+            "quality_level": result["quality_level"],
+            "review_summary": result["summary"],
+            "issues": result["issues"],
+            "model_id": settings.BEDROCK_NOVA_MODEL_ID,
+            "error": "",
+        },
+    )
+    record_audit_event(
+        request,
+        document,
+        AuditEvent.ACTION_EDIT,
+        {
+            "source": "ai_metadata_quality_review",
+            "quality_score": review.quality_score,
+            "quality_level": review.quality_level,
+            "issue_count": review.issue_count,
+            "model_id": review.model_id,
+        },
+    )
+    return review, ""
+
+
+@okta_role_required(is_loader)
+def run_metadata_quality_review(request, document_id):
+    if request.method != "POST":
+        return redirect("metadata_quality_detail", document_id=document_id)
+
+    try:
+        document = Document.objects.get(id=document_id)
+    except Document.DoesNotExist:
+        raise Http404("Document not found")
+
+    review, error = perform_metadata_quality_review(request, document)
+    if error:
+        messages.error(request, f"Metadata quality review failed: {error}")
+        return redirect("metadata_quality_detail", document_id=document.id)
+
+    messages.success(
+        request,
+        f"AI metadata quality review completed with score {review.quality_score}.",
+    )
+    return redirect("metadata_quality_detail", document_id=document.id)
+
+
+@okta_role_required(is_loader)
+def run_selected_metadata_quality_reviews(request):
+    if request.method != "POST":
+        return redirect("metadata_quality_dashboard")
+
+    selected_ids = []
+    for value in request.POST.getlist("document_ids"):
+        try:
+            selected_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+
+    selected_ids = list(dict.fromkeys(selected_ids))
+    if not selected_ids:
+        messages.warning(request, "Select at least one document to review.")
+        return redirect("metadata_quality_dashboard")
+
+    batch_limit = settings.AI_METADATA_QUALITY_BATCH_LIMIT
+    if len(selected_ids) > batch_limit:
+        messages.warning(
+            request,
+            f"Review up to {batch_limit} documents at a time.",
+        )
+        selected_ids = selected_ids[:batch_limit]
+
+    documents_by_id = Document.objects.in_bulk(selected_ids)
+    succeeded = 0
+    failed = 0
+
+    for document_id in selected_ids:
+        document = documents_by_id.get(document_id)
+        if document is None:
+            failed += 1
+            continue
+
+        review, error = perform_metadata_quality_review(request, document)
+        if review is not None and not error:
+            succeeded += 1
+        else:
+            failed += 1
+
+    if succeeded:
+        messages.success(
+            request,
+            f"AI metadata quality review completed for {succeeded} "
+            f"document{'s' if succeeded != 1 else ''}.",
+        )
+    if failed:
+        messages.warning(
+            request,
+            f"{failed} document review{'s' if failed != 1 else ''} failed.",
+        )
+
+    return redirect("metadata_quality_dashboard")
+
+
 @okta_role_required(is_viewer)
 def secure_document_view(request, document_id):
     try:
@@ -788,6 +1040,7 @@ def edit_document_metadata(request, document_id):
             before_metadata = get_document_audit_metadata(document)
             form.save()
             document.refresh_from_db()
+            invalidate_metadata_quality_review(document)
             after_metadata = get_document_audit_metadata(document)
             record_audit_event(
                 request,
@@ -881,6 +1134,7 @@ def accept_ai_metadata(request, document_id):
     document.ai_suggestion_status = Document.AI_STATUS_ACCEPTED
     document.save()
     document.refresh_from_db()
+    invalidate_metadata_quality_review(document)
 
     record_audit_event(
         request,

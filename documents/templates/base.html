@@ -545,6 +545,215 @@
             color: #a2191f;
         }
 
+        .quality-summary {
+            border-bottom: 1px solid #dde1e6;
+            border-top: 1px solid #dde1e6;
+            display: grid;
+            grid-template-columns: repeat(5, minmax(110px, 1fr));
+            margin-bottom: 18px;
+        }
+
+        .quality-summary > div {
+            border-right: 1px solid #dde1e6;
+            padding: 16px;
+        }
+
+        .quality-summary > div:last-child {
+            border-right: none;
+        }
+
+        .quality-summary span,
+        .quality-current-metadata span,
+        .quality-values span {
+            color: #525252;
+            display: block;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .quality-summary strong {
+            font-size: 24px;
+        }
+
+        .quality-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 18px;
+        }
+
+        .quality-filters a {
+            border-bottom: 2px solid transparent;
+            color: #393939;
+            padding: 8px 10px;
+            text-decoration: none;
+        }
+
+        .quality-filters a.active {
+            border-bottom-color: #0f62fe;
+            color: #0f62fe;
+            font-weight: 600;
+        }
+
+        .quality-batch-toolbar {
+            align-items: center;
+            background: #f4f4f4;
+            border: 1px solid #dde1e6;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            justify-content: flex-end;
+            padding: 10px 12px;
+        }
+
+        .quality-batch-toolbar button {
+            margin: 0;
+        }
+
+        .selection-column {
+            text-align: center;
+            width: 42px;
+        }
+
+        .selection-column input {
+            height: 18px;
+            margin: 0;
+            width: 18px;
+        }
+
+        .quality-score {
+            align-items: center;
+            border: 2px solid;
+            border-radius: 50%;
+            display: inline-flex;
+            font-size: 16px;
+            font-weight: 700;
+            height: 44px;
+            justify-content: center;
+            width: 44px;
+        }
+
+        .quality-excellent {
+            background: #defbe6;
+            border-color: #24a148;
+            color: #0e6027;
+        }
+
+        .quality-good {
+            background: #edf5ff;
+            border-color: #0f62fe;
+            color: #0043ce;
+        }
+
+        .quality-needs_review {
+            background: #fff1c7;
+            border-color: #f1c21b;
+            color: #684e00;
+        }
+
+        .quality-critical {
+            background: #fff1f1;
+            border-color: #da1e28;
+            color: #a2191f;
+        }
+
+        .quality-current-metadata {
+            border-bottom: 1px solid #dde1e6;
+            border-top: 1px solid #dde1e6;
+            display: grid;
+            gap: 18px;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            margin-bottom: 24px;
+            padding: 16px 0;
+        }
+
+        .quality-current-metadata strong,
+        .quality-values strong {
+            overflow-wrap: anywhere;
+        }
+
+        .quality-review-header {
+            align-items: flex-start;
+            border-bottom: 1px solid #dde1e6;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            padding-bottom: 20px;
+        }
+
+        .quality-review-header > div:first-child {
+            align-items: center;
+            display: flex;
+            gap: 16px;
+        }
+
+        .quality-review-header h3,
+        .quality-review-header p {
+            margin: 0 0 6px;
+        }
+
+        .quality-finding {
+            border-bottom: 1px solid #dde1e6;
+            padding: 20px 0;
+        }
+
+        .quality-finding-heading {
+            align-items: center;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .quality-finding-heading h3 {
+            font-size: 16px;
+            margin: 0;
+        }
+
+        .quality-values {
+            display: grid;
+            gap: 20px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            margin: 14px 0;
+        }
+
+        .severity-pill {
+            border: 1px solid;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 8px;
+        }
+
+        .severity-high {
+            background: #fff1f1;
+            border-color: #da1e28;
+            color: #a2191f;
+        }
+
+        .severity-medium {
+            background: #fff1c7;
+            border-color: #f1c21b;
+            color: #684e00;
+        }
+
+        .severity-low {
+            background: #edf5ff;
+            border-color: #0f62fe;
+            color: #0043ce;
+        }
+
+        .quality-actions {
+            align-items: center;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 22px;
+        }
+
+        .quality-actions form,
+        .quality-actions button {
+            margin: 0;
+        }
+
         .ai-placeholder-note {
             display: inline-block;
             margin-left: 10px;
@@ -648,6 +857,24 @@
             .ai-suggestion-panel {
                 grid-column: auto;
             }
+
+            .quality-summary {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .quality-summary > div {
+                border-bottom: 1px solid #dde1e6;
+            }
+
+            .quality-current-metadata,
+            .quality-values {
+                grid-template-columns: 1fr;
+            }
+
+            .quality-review-header {
+                gap: 16px;
+                flex-direction: column;
+            }
         }
 
     </style>
@@ -702,6 +929,11 @@
                class="{% if request.path == '/upload-scanned/' %}active{% endif %}">
 				Upload Scanned Image
 			</a>
+
+            <a href="{% url 'metadata_quality_dashboard' %}"
+               class="{% if '/metadata-quality/' in request.path %}active{% endif %}">
+                Metadata Quality
+            </a>
 
 			{% endif %}
 

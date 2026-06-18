@@ -214,6 +214,9 @@ GEMINI_BASE_URL = os.environ.get(
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 AI_METADATA_MAX_CHARS = int(os.environ.get("AI_METADATA_MAX_CHARS", "2500"))
+AI_METADATA_QUALITY_BATCH_LIMIT = int(
+    os.environ.get("AI_METADATA_QUALITY_BATCH_LIMIT", "3")
+)
 
 # AWS Bedrock Phase 3 settings. Credentials are intentionally not configured
 # here; boto3 should use the standard AWS credential provider chain.

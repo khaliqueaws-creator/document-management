@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}Metadata Quality{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>AI Metadata Quality</h2>
+        <p class="note">
+            Bedrock reviews current metadata against document content and stores
+            evidence-backed recommendations for human review.
+        </p>
+    </div>
+</div>
+
+<div class="quality-summary" aria-label="Metadata quality summary">
+    <div>
+        <span>Total documents</span>
+        <strong>{{ total_documents }}</strong>
+    </div>
+    <div>
+        <span>AI reviewed</span>
+        <strong>{{ reviewed_count }}</strong>
+    </div>
+    <div>
+        <span>Average score</span>
+        <strong>{% if average_score is not None %}{{ average_score }}{% else %}-{% endif %}</strong>
+    </div>
+    <div>
+        <span>Needs review</span>
+        <strong>{{ level_counts.needs_review }}</strong>
+    </div>
+    <div>
+        <span>Critical</span>
+        <strong>{{ level_counts.critical }}</strong>
+    </div>
+</div>
+
+<nav class="quality-filters" aria-label="Metadata quality filters">
+    <a href="{% url 'metadata_quality_dashboard' %}"
+       class="{% if active_filter == 'all' %}active{% endif %}">All</a>
+    <a href="?filter=critical"
+       class="{% if active_filter == 'critical' %}active{% endif %}">Critical</a>
+    <a href="?filter=needs_review"
+       class="{% if active_filter == 'needs_review' %}active{% endif %}">Needs Review</a>
+    <a href="?filter=good"
+       class="{% if active_filter == 'good' %}active{% endif %}">Good</a>
+    <a href="?filter=excellent"
+       class="{% if active_filter == 'excellent' %}active{% endif %}">Excellent</a>
+    <a href="?filter=unreviewed"
+       class="{% if active_filter == 'unreviewed' %}active{% endif %}">
+        Unreviewed ({{ unreviewed_count }})
+    </a>
+    {% if failed_count %}
+    <a href="?filter=failed"
+       class="{% if active_filter == 'failed' %}active{% endif %}">
+        Failed ({{ failed_count }})
+    </a>
+    {% endif %}
+</nav>
+
+<form method="post"
+      action="{% url 'run_selected_metadata_quality_reviews' %}"
+      id="metadata-quality-batch-form">
+    {% csrf_token %}
+    <div class="quality-batch-toolbar">
+        <span><strong id="selected-document-count">0</strong> selected</span>
+        <span class="muted-text">
+            Maximum {{ batch_limit }} per batch
+        </span>
+        <button type="submit" id="review-selected-button" disabled>
+            Review Selected
+        </button>
+    </div>
+
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th class="selection-column">
+                    <input type="checkbox"
+                           id="select-all-documents"
+                           aria-label="Select all documents on this page">
+                </th>
+                <th>Document</th>
+                <th>Current Metadata</th>
+                <th>AI Score</th>
+                <th>Finding</th>
+                <th>Reviewed</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in rows %}
+            <tr>
+                <td class="selection-column">
+                    <input type="checkbox"
+                           name="document_ids"
+                           value="{{ row.document.id }}"
+                           class="document-selection"
+                           aria-label="Select {{ row.document.file.name }}">
+                </td>
+                <td>
+                    <div class="primary-text">{{ row.document.file.name }}</div>
+                    <div class="muted-text">{{ row.document.uploaded_at|date:"M d, Y" }}</div>
+                </td>
+                <td>
+                    <div>{{ row.document.document_type|default:"Untyped" }}</div>
+                    <div class="muted-text">{{ row.document.department|default:"No department" }}</div>
+                </td>
+                <td>
+                    {% if row.review.status == "complete" %}
+                    <span class="quality-score quality-{{ row.review.quality_level }}">
+                        {{ row.review.quality_score }}
+                    </span>
+                    <div class="muted-text">{{ row.review.get_quality_level_display }}</div>
+                    {% elif row.review.status == "failed" %}
+                    <span class="status-pill">Failed</span>
+                    {% else %}
+                    <span class="muted-text">Not reviewed</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.review.status == "complete" %}
+                        {{ row.review.review_summary|default:"No quality concerns found."|truncatechars:150 }}
+                        <div class="muted-text">
+                            {{ row.review.issue_count }} issue{{ row.review.issue_count|pluralize }}
+                        </div>
+                    {% elif row.review.status == "failed" %}
+                        {{ row.review.error|truncatechars:150 }}
+                    {% else %}
+                        Run an AI review to compare metadata with document content.
+                    {% endif %}
+                </td>
+                <td>
+                    {% if row.review %}
+                        {{ row.review.reviewed_at|date:"M d, Y H:i" }}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+                <td>
+                    <div class="action-list">
+                        <a href="{% url 'metadata_quality_detail' row.document.id %}">
+                            {% if row.review %}View Review{% else %}Review{% endif %}
+                        </a>
+                        <a href="{% url 'edit_document_metadata' row.document.id %}">
+                            Edit Metadata
+                        </a>
+                    </div>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="7" class="empty">No documents match this filter.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</form>
+
+{% if page_obj.paginator.num_pages > 1 %}
+<nav class="pagination" aria-label="Metadata quality pages">
+    {% if page_obj.has_previous %}
+        <a href="?filter={{ active_filter }}&page={{ page_obj.previous_page_number }}">Previous</a>
+    {% else %}
+        <span>Previous</span>
+    {% endif %}
+    <strong>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</strong>
+    {% if page_obj.has_next %}
+        <a href="?filter={{ active_filter }}&page={{ page_obj.next_page_number }}">Next</a>
+    {% else %}
+        <span>Next</span>
+    {% endif %}
+</nav>
+{% endif %}
+
+<script>
+    (() => {
+        const selectAll = document.getElementById("select-all-documents");
+        const checkboxes = Array.from(
+            document.querySelectorAll(".document-selection")
+        );
+        const count = document.getElementById("selected-document-count");
+        const button = document.getElementById("review-selected-button");
+
+        const updateSelection = () => {
+            const selected = checkboxes.filter((checkbox) => checkbox.checked);
+            count.textContent = selected.length;
+            button.disabled = selected.length === 0;
+            selectAll.checked = (
+                checkboxes.length > 0
+                && selected.length === checkboxes.length
+            );
+            selectAll.indeterminate = (
+                selected.length > 0
+                && selected.length < checkboxes.length
+            );
+        };
+
+        selectAll.addEventListener("change", () => {
+            checkboxes.forEach((checkbox) => {
+                checkbox.checked = selectAll.checked;
+            });
+            updateSelection();
+        });
+
+        checkboxes.forEach((checkbox) => {
+            checkbox.addEventListener("change", updateSelection);
+        });
+        updateSelection();
+    })();
+</script>
+
+{% endblock %}

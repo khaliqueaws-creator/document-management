@@ -27,7 +27,14 @@ from .embeddings import (
 )
 from .mcp_retrieval import search_documents as mcp_search_documents
 from .mcp_indexing import index_document as mcp_index_document
-from .models import Document
+from .metadata_quality import (
+    MetadataQualityError,
+    build_metadata_quality_prompt,
+    parse_metadata_quality_response,
+    quality_level_for_score,
+    review_document_metadata,
+)
+from .models import Document, MetadataQualityReview
 from .opensearch_indexing import (
     OpenSearchIndexingError,
     build_metadata_filter_query,
@@ -53,6 +60,10 @@ from .rag import (
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
 from .views import (
+    invalidate_metadata_quality_review,
+    metadata_quality_dashboard,
+    run_selected_metadata_quality_reviews,
+    run_metadata_quality_review,
     store_ai_metadata_suggestions,
     try_index_document_for_search,
     try_rebuild_document_embeddings,
@@ -449,6 +460,381 @@ class MetadataExplainabilityTests(SimpleTestCase):
             "ai_explanation",
             document.save.call_args_list[1].kwargs["update_fields"],
         )
+
+
+class MetadataQualityServiceTests(SimpleTestCase):
+    def build_document(self):
+        return Mock(
+            document_type="Policy",
+            document_subtype="Benefits",
+            department="Finance",
+            author="",
+            description="Employee health policy",
+            tags="benefits",
+            extracted_text=(
+                "Eligible employees may enroll in health coverage. "
+                "Human Resources administers the benefits program."
+            ),
+        )
+
+    def test_prompt_compares_current_metadata_with_document_content(self):
+        prompt = build_metadata_quality_prompt(
+            self.build_document(),
+            "Eligible employees may enroll.",
+        )
+
+        self.assertIn('"department": "Finance"', prompt)
+        self.assertIn("accurate, relevant, and useful", prompt)
+        self.assertIn("populated values that conflict", prompt)
+        self.assertIn("Eligible employees may enroll.", prompt)
+
+    def test_parse_quality_response_returns_grounded_findings(self):
+        result = parse_metadata_quality_response(
+            json.dumps({
+                "quality_score": 58,
+                "summary": "Department and tags need review.",
+                "issues": [
+                    {
+                        "field": "department",
+                        "current_value": "Finance",
+                        "suggested_value": "Human Resources",
+                        "severity": "high",
+                        "reason": "The document describes employee benefits.",
+                        "evidence": (
+                            "Human Resources administers the benefits program."
+                        ),
+                    },
+                    {
+                        "field": "tags",
+                        "current_value": "benefits",
+                        "suggested_value": "benefits, health, enrollment",
+                        "severity": "medium",
+                        "reason": "The current tags omit key topics.",
+                        "evidence": (
+                            "Eligible employees may enroll in health coverage."
+                        ),
+                    },
+                ],
+            }),
+            self.build_document().extracted_text,
+        )
+
+        self.assertEqual(result["quality_score"], 58)
+        self.assertEqual(result["quality_level"], "needs_review")
+        self.assertEqual(result["issues"][0]["field_label"], "Department")
+        self.assertEqual(
+            result["issues"][0]["suggested_value"],
+            "Human Resources",
+        )
+
+    def test_parse_quality_response_removes_unmatched_evidence(self):
+        result = parse_metadata_quality_response(
+            json.dumps({
+                "quality_score": 80,
+                "summary": "Mostly accurate.",
+                "issues": [
+                    {
+                        "field": "department",
+                        "current_value": "Finance",
+                        "suggested_value": "HR",
+                        "severity": "medium",
+                        "reason": "Content mismatch.",
+                        "evidence": "Invented source sentence.",
+                    }
+                ],
+            }),
+            "Real source sentence.",
+        )
+
+        self.assertEqual(result["issues"][0]["evidence"], "")
+
+    def test_quality_level_is_normalized_from_score(self):
+        self.assertEqual(quality_level_for_score(95), "excellent")
+        self.assertEqual(quality_level_for_score(80), "good")
+        self.assertEqual(quality_level_for_score(60), "needs_review")
+        self.assertEqual(quality_level_for_score(20), "critical")
+
+    @override_settings(
+        AI_METADATA_MAX_CHARS=80,
+        AWS_REGION="us-east-1",
+        BEDROCK_NOVA_MODEL_ID="amazon.nova-lite-v1:0",
+        BEDROCK_TIMEOUT_SECONDS=30,
+    )
+    @patch("documents.metadata_quality.boto3.client")
+    def test_review_document_metadata_calls_bedrock(self, mock_client):
+        client = Mock()
+        client.invoke_model.return_value = {
+            "body": BytesIO(json.dumps({
+                "output": {
+                    "message": {
+                        "content": [{
+                            "text": json.dumps({
+                                "quality_score": 91,
+                                "summary": "Metadata is accurate.",
+                                "issues": [],
+                            }),
+                        }],
+                    },
+                },
+            }).encode("utf-8")),
+        }
+        mock_client.return_value = client
+
+        result = review_document_metadata(self.build_document())
+
+        self.assertEqual(result["quality_level"], "excellent")
+        client.invoke_model.assert_called_once()
+        body = json.loads(client.invoke_model.call_args.kwargs["body"])
+        self.assertEqual(body["inferenceConfig"]["temperature"], 0.1)
+
+    def test_review_document_metadata_requires_extracted_text(self):
+        document = self.build_document()
+        document.extracted_text = ""
+
+        with self.assertRaisesMessage(
+            MetadataQualityError,
+            "No extracted text",
+        ):
+            review_document_metadata(document)
+
+
+class MetadataQualityViewTests(SimpleTestCase):
+    def get_loader_request(self, method="GET", query=None):
+        return Mock(
+            method=method,
+            GET=query or {},
+            session={
+                "user": {
+                    "groups": ["DocumentLoader"],
+                    "name": "Loader",
+                    "email": "loader@example.com",
+                },
+            },
+        )
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+        DOCUMENTS_PER_PAGE=10,
+    )
+    @patch("documents.views.render")
+    @patch("documents.views.MetadataQualityReview.objects.all")
+    @patch("documents.views.Document.objects.order_by")
+    def test_dashboard_reports_stored_review_summary(
+        self,
+        mock_documents,
+        mock_reviews,
+        mock_render,
+    ):
+        documents = [
+            Mock(id=1),
+            Mock(id=2),
+            Mock(id=3),
+        ]
+        reviews = [
+            Mock(
+                document_id=1,
+                status="complete",
+                quality_score=90,
+                quality_level="excellent",
+            ),
+            Mock(
+                document_id=2,
+                status="complete",
+                quality_score=50,
+                quality_level="needs_review",
+            ),
+        ]
+        mock_documents.return_value = documents
+        mock_reviews.return_value = reviews
+        mock_render.return_value = Mock()
+
+        response = metadata_quality_dashboard(self.get_loader_request())
+
+        self.assertEqual(response, mock_render.return_value)
+        context = mock_render.call_args.args[2]
+        self.assertEqual(context["total_documents"], 3)
+        self.assertEqual(context["reviewed_count"], 2)
+        self.assertEqual(context["unreviewed_count"], 1)
+        self.assertEqual(context["average_score"], 70)
+        self.assertEqual(context["level_counts"]["needs_review"], 1)
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+        BEDROCK_NOVA_MODEL_ID="amazon.nova-lite-v1:0",
+    )
+    @patch("documents.views.messages.success")
+    @patch("documents.views.record_audit_event")
+    @patch("documents.views.redirect")
+    @patch("documents.views.MetadataQualityReview.objects.update_or_create")
+    @patch("documents.views.review_document_metadata")
+    @patch("documents.views.Document.objects.get")
+    def test_run_review_persists_result_without_changing_document(
+        self,
+        mock_get,
+        mock_review,
+        mock_update,
+        mock_redirect,
+        mock_audit,
+        mock_success,
+    ):
+        document = Mock(id=42)
+        review = Mock(
+            quality_score=58,
+            quality_level="needs_review",
+            issue_count=2,
+            model_id="amazon.nova-lite-v1:0",
+        )
+        mock_get.return_value = document
+        mock_review.return_value = {
+            "quality_score": 58,
+            "quality_level": "needs_review",
+            "summary": "Department needs review.",
+            "issues": [{"field": "department"}],
+        }
+        mock_update.return_value = (review, True)
+        mock_redirect.return_value = Mock()
+
+        response = run_metadata_quality_review(
+            self.get_loader_request(method="POST"),
+            42,
+        )
+
+        self.assertEqual(response, mock_redirect.return_value)
+        defaults = mock_update.call_args.kwargs["defaults"]
+        self.assertEqual(defaults["quality_score"], 58)
+        self.assertEqual(defaults["issues"], [{"field": "department"}])
+        document.save.assert_not_called()
+        mock_audit.assert_called_once()
+        self.assertEqual(
+            mock_audit.call_args.args[3]["source"],
+            "ai_metadata_quality_review",
+        )
+        mock_success.assert_called_once()
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+        BEDROCK_NOVA_MODEL_ID="amazon.nova-lite-v1:0",
+    )
+    @patch("documents.views.messages.error")
+    @patch("documents.views.redirect")
+    @patch("documents.views.MetadataQualityReview.objects.update_or_create")
+    @patch("documents.views.review_document_metadata")
+    @patch("documents.views.Document.objects.get")
+    def test_run_review_persists_provider_failure(
+        self,
+        mock_get,
+        mock_review,
+        mock_update,
+        mock_redirect,
+        mock_error,
+    ):
+        mock_get.return_value = Mock(id=42)
+        mock_review.side_effect = MetadataQualityError("Bedrock unavailable")
+        mock_redirect.return_value = Mock()
+
+        run_metadata_quality_review(
+            self.get_loader_request(method="POST"),
+            42,
+        )
+
+        defaults = mock_update.call_args.kwargs["defaults"]
+        self.assertEqual(defaults["status"], "failed")
+        self.assertEqual(defaults["error"], "Bedrock unavailable")
+        mock_error.assert_called_once()
+
+    @patch("documents.views.MetadataQualityReview.objects.filter")
+    def test_metadata_change_invalidates_stored_quality_review(self, mock_filter):
+        document = Mock(id=42)
+
+        invalidate_metadata_quality_review(document)
+
+        mock_filter.assert_called_once_with(document_id=42)
+        mock_filter.return_value.delete.assert_called_once()
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+        AI_METADATA_QUALITY_BATCH_LIMIT=3,
+    )
+    @patch("documents.views.messages.warning")
+    @patch("documents.views.messages.success")
+    @patch("documents.views.redirect")
+    @patch("documents.views.perform_metadata_quality_review")
+    @patch("documents.views.Document.objects.in_bulk")
+    def test_selected_reviews_process_batch_and_report_results(
+        self,
+        mock_in_bulk,
+        mock_perform,
+        mock_redirect,
+        mock_success,
+        mock_warning,
+    ):
+        documents = {
+            1: Mock(id=1),
+            2: Mock(id=2),
+            3: Mock(id=3),
+        }
+        mock_in_bulk.return_value = documents
+        mock_perform.side_effect = [
+            (Mock(), ""),
+            (None, "Bedrock unavailable"),
+            (Mock(), ""),
+        ]
+        mock_redirect.return_value = Mock()
+        request = self.get_loader_request(method="POST")
+        request.POST = Mock()
+        request.POST.getlist.return_value = ["1", "2", "3"]
+
+        response = run_selected_metadata_quality_reviews(request)
+
+        self.assertEqual(response, mock_redirect.return_value)
+        mock_in_bulk.assert_called_once_with([1, 2, 3])
+        self.assertEqual(mock_perform.call_count, 3)
+        self.assertIn("2 documents", mock_success.call_args.args[1])
+        self.assertIn("1 document review", mock_warning.call_args.args[1])
+
+    @override_settings(
+        OKTA_GROUP_VIEWER="DocumentViewer",
+        OKTA_GROUP_LOADER="DocumentLoader",
+        OKTA_GROUP_ADMIN="DocumentAdmin",
+        AI_METADATA_QUALITY_BATCH_LIMIT=3,
+    )
+    @patch("documents.views.messages.warning")
+    @patch("documents.views.messages.success")
+    @patch("documents.views.redirect")
+    @patch("documents.views.perform_metadata_quality_review")
+    @patch("documents.views.Document.objects.in_bulk")
+    def test_selected_reviews_limit_large_synchronous_batch(
+        self,
+        mock_in_bulk,
+        mock_perform,
+        mock_redirect,
+        mock_success,
+        mock_warning,
+    ):
+        mock_in_bulk.return_value = {
+            1: Mock(id=1),
+            2: Mock(id=2),
+            3: Mock(id=3),
+        }
+        mock_perform.return_value = (Mock(), "")
+        request = self.get_loader_request(method="POST")
+        request.POST = Mock()
+        request.POST.getlist.return_value = ["1", "2", "3", "4"]
+
+        run_selected_metadata_quality_reviews(request)
+
+        mock_in_bulk.assert_called_once_with([1, 2, 3])
+        self.assertEqual(mock_perform.call_count, 3)
+        self.assertIn("up to 3", mock_warning.call_args_list[0].args[1])
+        mock_success.assert_called_once()
 
 
 class EmbeddingTests(SimpleTestCase):
@@ -1059,10 +1445,12 @@ class SourceOfTruthViewFlowTests(SimpleTestCase):
     @patch("documents.views.messages.success")
     @patch("documents.views.record_audit_event")
     @patch("documents.views.try_reindex_document")
+    @patch("documents.views.invalidate_metadata_quality_review")
     @patch("documents.views.Document.objects.get")
     def test_accept_ai_metadata_saves_postgres_before_reindexing(
         self,
         mock_get,
+        mock_invalidate,
         mock_reindex,
         mock_audit,
         mock_success,
@@ -1095,6 +1483,7 @@ class SourceOfTruthViewFlowTests(SimpleTestCase):
         self.assertEqual(document.tags, "benefits")
         self.assertEqual(document.description, "Policy summary")
         self.assertEqual(call_order, ["save", "refresh", "reindex"])
+        mock_invalidate.assert_called_once_with(document)
         mock_reindex.assert_called_once_with(request, document)
         mock_audit.assert_called_once()
         mock_success.assert_called_once()

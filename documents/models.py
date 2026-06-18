@@ -128,6 +128,57 @@ class DocumentChunk(models.Model):
         return f"{self.document_id} - chunk {self.chunk_index}"
 
 
+class MetadataQualityReview(models.Model):
+    STATUS_COMPLETE = "complete"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_COMPLETE, "Complete"),
+        (STATUS_FAILED, "Failed"),
+    ]
+    LEVEL_EXCELLENT = "excellent"
+    LEVEL_GOOD = "good"
+    LEVEL_NEEDS_REVIEW = "needs_review"
+    LEVEL_CRITICAL = "critical"
+    LEVEL_CHOICES = [
+        (LEVEL_EXCELLENT, "Excellent"),
+        (LEVEL_GOOD, "Good"),
+        (LEVEL_NEEDS_REVIEW, "Needs review"),
+        (LEVEL_CRITICAL, "Critical"),
+    ]
+
+    document = models.OneToOneField(
+        Document,
+        on_delete=models.CASCADE,
+        related_name="metadata_quality_review",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_COMPLETE,
+    )
+    quality_score = models.PositiveSmallIntegerField(default=0)
+    quality_level = models.CharField(
+        max_length=20,
+        choices=LEVEL_CHOICES,
+        blank=True,
+    )
+    review_summary = models.TextField(blank=True)
+    issues = models.JSONField(default=list, blank=True)
+    model_id = models.CharField(max_length=100, blank=True)
+    error = models.TextField(blank=True)
+    reviewed_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["quality_score", "-reviewed_at"]
+
+    @property
+    def issue_count(self):
+        return len(self.issues) if isinstance(self.issues, list) else 0
+
+    def __str__(self):
+        return f"{self.document_id} - {self.quality_score}"
+
+
 class AuditEvent(models.Model):
     ACTION_UPLOAD = "upload"
     ACTION_EDIT = "edit"

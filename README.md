@@ -73,6 +73,7 @@ The platform currently supports document upload, metadata capture, OCR and text 
 - Authorize access through Okta group-based application roles.
 - Generate AI metadata suggestions through AWS Bedrock Nova Lite.
 - Show field-level confidence, reasons, and source evidence for AI metadata suggestions.
+- Review existing metadata against document content with stored AI quality scores and evidence-backed recommendations.
 - Auto-generate AI suggestions during upload when extracted text is available.
 - Review, accept, reject, or regenerate AI suggestions from the edit metadata page.
 - Split extracted text into chunks and store AWS Bedrock Titan embeddings.
@@ -255,6 +256,18 @@ Open the RAG document Q&A page:
 ```text
 /ask/
 ```
+
+Open the loader/admin AI metadata quality dashboard:
+
+```text
+/metadata-quality/
+```
+
+Quality reviews run only when a loader or administrator explicitly requests one.
+Bedrock compares current metadata with extracted document text, stores a score
+and findings in PostgreSQL, and never changes official metadata automatically.
+The dashboard supports selecting and reviewing up to three documents per
+synchronous batch.
 
 For a learning-focused walkthrough of the RAG call flow, model roles, prompt
 construction, and citation handling, see

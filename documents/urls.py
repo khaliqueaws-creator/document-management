@@ -47,6 +47,26 @@ urlpatterns = [
     path("profile/", views.profile, name="profile"),
 
     path("audit/", views.audit_events, name="audit_events"),
+    path(
+        "metadata-quality/",
+        views.metadata_quality_dashboard,
+        name="metadata_quality_dashboard",
+    ),
+    path(
+        "metadata-quality/<int:document_id>/",
+        views.metadata_quality_detail,
+        name="metadata_quality_detail",
+    ),
+    path(
+        "metadata-quality/<int:document_id>/review/",
+        views.run_metadata_quality_review,
+        name="run_metadata_quality_review",
+    ),
+    path(
+        "metadata-quality/review-selected/",
+        views.run_selected_metadata_quality_reviews,
+        name="run_selected_metadata_quality_reviews",
+    ),
 
     # Secure document viewing
     path(

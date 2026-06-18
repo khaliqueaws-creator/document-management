@@ -1,6 +1,6 @@
 # Register your models here.
 from django.contrib import admin
-from .models import AuditEvent, Document, DocumentChunk
+from .models import AuditEvent, Document, DocumentChunk, MetadataQualityReview
 
 
 @admin.register(Document)
@@ -70,4 +70,29 @@ class DocumentChunkAdmin(admin.ModelAdmin):
         "embedding",
         "embedding_model",
         "created_at",
+    )
+
+
+@admin.register(MetadataQualityReview)
+class MetadataQualityReviewAdmin(admin.ModelAdmin):
+    list_display = (
+        "document",
+        "quality_score",
+        "quality_level",
+        "status",
+        "model_id",
+        "reviewed_at",
+    )
+    list_filter = ("status", "quality_level", "reviewed_at")
+    search_fields = ("document__file", "review_summary", "error")
+    readonly_fields = (
+        "document",
+        "status",
+        "quality_score",
+        "quality_level",
+        "review_summary",
+        "issues",
+        "model_id",
+        "error",
+        "reviewed_at",
     )

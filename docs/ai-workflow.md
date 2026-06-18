@@ -152,6 +152,63 @@ Validation confirmed:
 Existing suggestions created before migration `0012` may not include
 explanations. Use Regenerate to create the structured explainability response.
 
+## AI Metadata Quality Review
+
+The Metadata Quality dashboard reviews existing official metadata, including
+metadata entered manually or accepted from an earlier AI suggestion.
+
+```text
+Loader Selects A Document
+     |
+     v
+Current Metadata + Extracted Text
+     |
+     v
+Bedrock Nova Lite Quality Review
+     |
+     +--> Quality score
+     |
+     +--> Semantic mismatch findings
+     |
+     +--> Recommended values
+     |
+     +--> Reasons and source evidence
+     |
+     v
+Store MetadataQualityReview In PostgreSQL
+     |
+     v
+Human Reviews And Edits Official Metadata
+```
+
+This differs from upload-time metadata suggestion:
+
+- Metadata suggestion asks what metadata a document should have.
+- Metadata quality review asks whether the current metadata accurately
+  represents the document.
+
+Bedrock performs the semantic judgment. Django validates the response shape,
+score range, supported fields, severity values, and source evidence. Reviews
+are stored and reused by the dashboard; opening the dashboard does not make a
+Bedrock call. Official metadata is never changed automatically. When official
+metadata changes, the stored quality review is removed so an outdated score is
+not presented as current.
+
+Quality levels are normalized from the AI score for consistent presentation:
+
+| Score | Level |
+| --- | --- |
+| 90-100 | Excellent |
+| 75-89 | Good |
+| 50-74 | Needs review |
+| 0-49 | Critical |
+
+The first demo implementation supports explicit per-document Review and Review
+Again actions plus selecting up to three documents for one synchronous review
+batch. The limit keeps the request within the OpenShift web timeout while
+background workers remain deferred. Scheduled scans and automatic remediation
+remain out of scope.
+
 ## Human Review Design
 
 The platform intentionally requires human review before AI metadata becomes official metadata.

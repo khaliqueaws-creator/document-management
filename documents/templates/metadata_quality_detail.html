@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% block title %}Metadata Quality Review{% endblock %}
+
+{% block content %}
+
+<div class="page-header">
+    <div>
+        <h2>Metadata Quality Review</h2>
+        <p class="note">{{ document.file.name }}</p>
+    </div>
+    <a href="{% url 'metadata_quality_dashboard' %}" class="secondary-action">
+        Back To Dashboard
+    </a>
+</div>
+
+<div class="quality-current-metadata">
+    <div><span>Document type</span><strong>{{ document.document_type|default:"-" }}</strong></div>
+    <div><span>Department</span><strong>{{ document.department|default:"-" }}</strong></div>
+    <div><span>Tags</span><strong>{{ document.tags|default:"-" }}</strong></div>
+    <div><span>Description</span><strong>{{ document.description|default:"-"|truncatechars:160 }}</strong></div>
+</div>
+
+{% if review.status == "complete" %}
+<div class="quality-review-header">
+    <div>
+        <span class="quality-score quality-{{ review.quality_level }}">{{ review.quality_score }}</span>
+        <div>
+            <h3>{{ review.get_quality_level_display }}</h3>
+            <p>{{ review.review_summary|default:"No metadata quality concerns were identified." }}</p>
+        </div>
+    </div>
+    <div class="muted-text">
+        {{ review.model_id }}<br>
+        Reviewed {{ review.reviewed_at|date:"M d, Y H:i" }}
+    </div>
+</div>
+
+<div class="quality-findings">
+    {% for issue in review.issues %}
+    <section class="quality-finding">
+        <div class="quality-finding-heading">
+            <h3>{{ issue.field_label|default:issue.field }}</h3>
+            <span class="severity-pill severity-{{ issue.severity }}">
+                {{ issue.severity|capfirst }}
+            </span>
+        </div>
+        <div class="quality-values">
+            <div>
+                <span>Current</span>
+                <strong>{{ issue.current_value|default:"-" }}</strong>
+            </div>
+            <div>
+                <span>AI recommendation</span>
+                <strong>{{ issue.suggested_value|default:"Review manually" }}</strong>
+            </div>
+        </div>
+        <p><strong>Why:</strong> {{ issue.reason }}</p>
+        {% if issue.evidence %}
+        <blockquote class="ai-evidence">{{ issue.evidence }}</blockquote>
+        {% endif %}
+    </section>
+    {% empty %}
+    <p class="empty">AI found no metadata quality issues for this document.</p>
+    {% endfor %}
+</div>
+{% elif review.status == "failed" %}
+<div class="alert alert-error">
+    The last AI metadata quality review failed: {{ review.error }}
+</div>
+{% else %}
+<p class="empty">
+    This document has not been reviewed for metadata quality yet.
+</p>
+{% endif %}
+
+<div class="quality-actions">
+    <form method="post" action="{% url 'run_metadata_quality_review' document.id %}">
+        {% csrf_token %}
+        <button type="submit">
+            {% if review %}Review Again{% else %}Run AI Review{% endif %}
+        </button>
+    </form>
+    <a href="{% url 'edit_document_metadata' document.id %}" class="secondary-action">
+        Edit Metadata
+    </a>
+    <a href="{% url 'secure_document_view' document.id %}"
+       target="_blank"
+       rel="noopener"
+       class="secondary-action">
+        Open Document
+    </a>
+</div>
+
+{% endblock %}
