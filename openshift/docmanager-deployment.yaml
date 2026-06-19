@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
         - name: migrate
-          image: docker.io/khalique/document-app:2.7-multi-turn-rag
+          image: docker.io/khalique/document-app:2.7.1-multi-turn-rag
           command:
             - /bin/sh
             - -c
@@ -50,7 +50,7 @@ spec:
               mountPath: /app/media
       containers:
         - name: document-app
-          image: docker.io/khalique/document-app:2.7-multi-turn-rag
+          image: docker.io/khalique/document-app:2.7.1-multi-turn-rag
           command:
             - gunicorn
             - docmanager.wsgi:application
