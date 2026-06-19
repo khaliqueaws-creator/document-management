@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from uuid import uuid4
 
@@ -23,6 +24,50 @@ LOW_CONTEXT_REFUSAL = (
     "The available documents do not contain enough relevant information to "
     "answer this question."
 )
+
+
+def get_recent_conversation_history(conversation_history):
+    max_turns = settings.AI_RAG_CONVERSATION_MAX_TURNS
+    max_chars = settings.AI_RAG_CONVERSATION_MAX_CHARS
+    recent_turns = []
+    remaining_chars = max_chars
+
+    for turn in reversed((conversation_history or [])[-max_turns:]):
+        question = (turn.get("question") or "").strip()
+        answer = (turn.get("answer") or "").strip()
+        answer = re.sub(r"\[\d+\]", "", answer).strip()
+
+        if not question and not answer:
+            continue
+
+        turn_text = f"User: {question}\nAssistant: {answer}".strip()
+        if len(turn_text) > remaining_chars:
+            turn_text = turn_text[:remaining_chars].rstrip()
+
+        if not turn_text:
+            break
+
+        recent_turns.append(turn_text)
+        remaining_chars -= len(turn_text)
+
+        if remaining_chars <= 0:
+            break
+
+    return list(reversed(recent_turns))
+
+
+def build_conversation_retrieval_query(question, conversation_history=None):
+    question = (question or "").strip()
+    history = get_recent_conversation_history(conversation_history)
+
+    if not history:
+        return question
+
+    return "\n".join([
+        f"Current follow-up question: {question}",
+        "Recent conversation context:",
+        *history,
+    ])
 
 
 def get_accessible_documents(documents_queryset=None):
@@ -251,9 +296,10 @@ def has_sufficient_context(contexts):
     return context_chars >= min_chars
 
 
-def build_rag_prompt(question, contexts):
+def build_rag_prompt(question, contexts, conversation_history=None):
     context_blocks = []
     max_chars = settings.AI_RAG_MAX_CONTEXT_CHARS
+    history = get_recent_conversation_history(conversation_history)
 
     for context in contexts:
         document = context["document"]
@@ -268,6 +314,8 @@ def build_rag_prompt(question, contexts):
             ])
         )
 
+    history_block = "\n".join(history) if history else "No previous turns."
+
     return f"""
 You are a document question-answering assistant.
 
@@ -275,9 +323,13 @@ Answer the user's question using only the provided document excerpts. Cite every
 factual claim with bracketed citation ids like [1] or [2]. If the excerpts do
 not contain enough information, say that the available documents do not contain
 enough information to answer. Do not mention or infer from documents that are
-not included in the excerpts.
+not included in the excerpts. Conversation history may only be used to resolve
+follow-up references such as "those contracts"; it is not factual evidence.
 
-Question:
+Conversation history:
+{history_block}
+
+Current question:
 {question}
 
 Document excerpts:
@@ -352,7 +404,11 @@ def generate_rag_answer(prompt):
     return generate_answer_with_bedrock(prompt)
 
 
-def answer_question(question, documents_queryset=None):
+def answer_question(
+    question,
+    documents_queryset=None,
+    conversation_history=None,
+):
     question = (question or "").strip()
 
     if not question:
@@ -362,8 +418,12 @@ def answer_question(question, documents_queryset=None):
             "empty": True,
         }
 
-    contexts = retrieve_answer_context(
+    retrieval_query = build_conversation_retrieval_query(
         question,
+        conversation_history=conversation_history,
+    )
+    contexts = retrieve_answer_context(
+        retrieval_query,
         documents_queryset=documents_queryset,
     )
 
@@ -381,7 +441,11 @@ def answer_question(question, documents_queryset=None):
             "empty": True,
         }
 
-    prompt = build_rag_prompt(question, contexts)
+    prompt = build_rag_prompt(
+        question,
+        contexts,
+        conversation_history=conversation_history,
+    )
     answer = generate_rag_answer(prompt)
 
     return {

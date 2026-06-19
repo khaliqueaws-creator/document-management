@@ -126,6 +126,8 @@ environment:
 | AI_RAG_MAX_ANSWER_TOKENS | 700 | Maximum answer tokens requested from Bedrock Nova Lite. |
 | AI_RAG_MIN_CONTEXT_CHARS | 80 | Minimum combined retrieved context required before answer generation. |
 | AI_RAG_MIN_RETRIEVAL_SCORE | 0 | Optional OpenSearch score floor for retrieved RAG chunks. |
+| AI_RAG_CONVERSATION_MAX_TURNS | 5 | Maximum recent Q&A turns retained in the user's session. |
+| AI_RAG_CONVERSATION_MAX_CHARS | 4000 | Maximum conversation text supplied for follow-up resolution. |
 | MCP_RETRIEVAL_ENABLED | True | Routes Ask Documents retrieval through the MCP boundary. |
 | MCP_RETRIEVAL_FALLBACK_ENABLED | False | Disables direct retrieval fallback during MCP validation so failures are visible. |
 | MCP_INDEXING_ENABLED | True | Routes upload/reprocess and bulk import indexing through the MCP indexing boundary. |

@@ -51,6 +51,7 @@ from .rag import (
     RAGError,
     answer_question,
     build_bedrock_rag_request,
+    build_conversation_retrieval_query,
     build_rag_prompt,
     generate_rag_answer,
     has_sufficient_context,
@@ -60,10 +61,12 @@ from .rag import (
 )
 from .semantic_search import cosine_similarity, search_documents_by_meaning
 from .views import (
+    hydrate_ask_conversation,
     invalidate_metadata_quality_review,
     metadata_quality_dashboard,
     run_selected_metadata_quality_reviews,
     run_metadata_quality_review,
+    serialize_ask_turn,
     store_ai_metadata_suggestions,
     try_index_document_for_search,
     try_rebuild_document_embeddings,
@@ -2001,6 +2004,57 @@ class SemanticSearchTests(SimpleTestCase):
 
 class RAGTests(SimpleTestCase):
     @override_settings(
+        AI_RAG_CONVERSATION_MAX_TURNS=2,
+        AI_RAG_CONVERSATION_MAX_CHARS=1000,
+    )
+    def test_follow_up_retrieval_query_includes_recent_conversation(self):
+        query = build_conversation_retrieval_query(
+            "Which of those renew automatically?",
+            conversation_history=[
+                {
+                    "question": "Which contracts expire within 90 days?",
+                    "answer": "Alpha and Beta expire within 90 days.",
+                },
+                {
+                    "question": "Who owns them?",
+                    "answer": "Legal owns both contracts.",
+                },
+            ],
+        )
+
+        self.assertIn("Which of those renew automatically?", query)
+        self.assertIn("Alpha and Beta", query)
+        self.assertIn("Legal owns both", query)
+
+    @override_settings(
+        AI_RAG_CONVERSATION_MAX_TURNS=1,
+        AI_RAG_CONVERSATION_MAX_CHARS=1000,
+        AI_RAG_MAX_CONTEXT_CHARS=50,
+    )
+    def test_rag_prompt_uses_history_only_to_resolve_follow_ups(self):
+        document = Mock()
+        document.file.name = "documents/contract.pdf"
+        document.department = "Legal"
+        document.document_type = "Contract"
+
+        prompt = build_rag_prompt(
+            "Which of those renew automatically?",
+            [{
+                "citation_id": 1,
+                "document": document,
+                "chunk_text": "The agreement renews automatically.",
+            }],
+            conversation_history=[{
+                "question": "Which contracts expire soon?",
+                "answer": "The Alpha agreement expires soon [1].",
+            }],
+        )
+
+        self.assertIn("The Alpha agreement expires soon", prompt)
+        self.assertIn("it is not factual evidence", prompt)
+        self.assertIn("The agreement renews automatically", prompt)
+
+    @override_settings(
         AI_RAG_TOP_K=2,
         AI_RAG_MIN_RETRIEVAL_SCORE=0,
         BEDROCK_EMBED_MODEL_ID="amazon.titan-embed-text-v2:0",
@@ -2198,6 +2252,41 @@ class RAGTests(SimpleTestCase):
         self.assertEqual(result["answer"], "Use the policy [1].")
         self.assertEqual(result["citations"], [citation])
 
+    @override_settings(
+        AI_RAG_CONVERSATION_MAX_TURNS=5,
+        AI_RAG_CONVERSATION_MAX_CHARS=4000,
+    )
+    @patch("documents.rag.generate_rag_answer")
+    @patch("documents.rag.retrieve_answer_context")
+    def test_answer_question_runs_fresh_retrieval_for_follow_up(
+        self,
+        mock_context,
+        mock_generate,
+    ):
+        citation = {
+            "citation_id": 1,
+            "document": Mock(),
+            "chunk_text": "Automatic renewal applies.",
+        }
+        history = [{
+            "question": "Which contracts expire soon?",
+            "answer": "The Alpha agreement expires soon.",
+        }]
+        mock_context.return_value = [citation]
+        mock_generate.return_value = "It renews automatically [1]."
+
+        with self.settings(AI_RAG_MIN_CONTEXT_CHARS=1):
+            answer_question(
+                "Does it renew automatically?",
+                documents_queryset=Mock(),
+                conversation_history=history,
+            )
+
+        retrieval_query = mock_context.call_args.args[0]
+        self.assertIn("Does it renew automatically?", retrieval_query)
+        self.assertIn("Alpha agreement", retrieval_query)
+        mock_context.assert_called_once()
+
     @patch("documents.rag.generate_rag_answer")
     @patch("documents.rag.retrieve_question_context")
     def test_answer_question_refuses_low_context_without_generation(
@@ -2384,6 +2473,47 @@ class RAGTests(SimpleTestCase):
             retrieve_answer_context("What policy applies?", documents_queryset=Mock())
 
         mock_direct.assert_not_called()
+
+
+class AskConversationTests(SimpleTestCase):
+    def test_serialize_ask_turn_keeps_session_safe_citation_data(self):
+        document = Mock()
+        document.id = 42
+        result = {
+            "answer": "Grounded answer [1].",
+            "citations": [{
+                "document": document,
+                "chunk_text": "A" * 600,
+                "score": 1.25,
+            }],
+        }
+
+        turn = serialize_ask_turn("What applies?", result)
+
+        self.assertEqual(turn["citations"][0]["document_id"], 42)
+        self.assertEqual(len(turn["citations"][0]["chunk_text"]), 500)
+        self.assertNotIn("document", turn["citations"][0])
+
+    def test_hydrate_conversation_removes_turn_with_inaccessible_citations(self):
+        accessible_document = Mock()
+        accessible_document.id = 7
+        accessible_documents = Mock()
+        accessible_documents.in_bulk.return_value = {7: accessible_document}
+        stored_turns = [{
+            "question": "Which contracts expire?",
+            "answer": "Two contracts expire.",
+            "citations": [
+                {"document_id": 7, "chunk_text": "Allowed", "score": 1.2},
+                {"document_id": 8, "chunk_text": "Denied", "score": 1.1},
+            ],
+        }]
+
+        conversation = hydrate_ask_conversation(
+            stored_turns,
+            accessible_documents,
+        )
+
+        self.assertEqual(conversation, [])
 
 
 class MCPRetrievalTests(SimpleTestCase):

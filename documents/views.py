@@ -54,6 +54,9 @@ from pdf2image import convert_from_path
 from openpyxl import load_workbook
 
 
+ASK_CONVERSATION_SESSION_KEY = "ask_documents_conversation"
+
+
 def get_session_user(request):
     return request.session.get("user", {})
 
@@ -90,6 +93,60 @@ def get_accessible_documents_queryset(request):
         return Document.objects.all()
 
     return Document.objects.none()
+
+
+def serialize_ask_turn(question, rag_result):
+    citations = []
+
+    for citation in rag_result.get("citations") or []:
+        document = citation["document"]
+        citations.append({
+            "document_id": document.id,
+            "chunk_text": (citation.get("chunk_text") or "")[:500],
+            "score": citation.get("score") or 0,
+        })
+
+    return {
+        "question": question,
+        "answer": rag_result.get("answer") or "",
+        "citations": citations,
+    }
+
+
+def hydrate_ask_conversation(stored_turns, accessible_documents):
+    document_ids = {
+        citation.get("document_id")
+        for turn in stored_turns
+        for citation in (turn.get("citations") or [])
+        if citation.get("document_id") is not None
+    }
+    documents_by_id = accessible_documents.in_bulk(document_ids)
+    conversation = []
+
+    for turn in stored_turns:
+        citations = []
+        stored_citations = turn.get("citations") or []
+        for stored_citation in stored_citations:
+            document = documents_by_id.get(stored_citation.get("document_id"))
+            if document is None:
+                continue
+            citations.append({
+                "citation_id": len(citations) + 1,
+                "document": document,
+                "chunk_text": stored_citation.get("chunk_text") or "",
+                "score": stored_citation.get("score") or 0,
+            })
+
+        if len(citations) != len(stored_citations):
+            continue
+
+        conversation.append({
+            "question": (turn.get("question") or "").strip(),
+            "answer": (turn.get("answer") or "").strip(),
+            "citations": citations,
+        })
+
+    return conversation
 
 
 def record_audit_event(request, document, action, metadata=None):
@@ -720,9 +777,21 @@ def ai_search(request):
 
 @okta_role_required(is_viewer)
 def ask_documents(request):
+    if request.GET.get("new") == "1":
+        request.session.pop(ASK_CONVERSATION_SESSION_KEY, None)
+        return redirect("ask_documents")
+
     question = (request.GET.get("q") or "").strip()
     rag_result = None
     accessible_documents = get_accessible_documents_queryset(request)
+    stored_conversation = request.session.get(
+        ASK_CONVERSATION_SESSION_KEY,
+        [],
+    )
+    conversation = hydrate_ask_conversation(
+        stored_conversation,
+        accessible_documents,
+    )
     has_embeddings = (
         DocumentChunk.objects
         .exclude(embedding=[])
@@ -736,16 +805,31 @@ def ask_documents(request):
             rag_result = answer_question(
                 question,
                 documents_queryset=accessible_documents,
+                conversation_history=conversation,
             )
+            stored_conversation.append(
+                serialize_ask_turn(question, rag_result)
+            )
+            stored_conversation = stored_conversation[
+                -settings.AI_RAG_CONVERSATION_MAX_TURNS:
+            ]
+            request.session[ASK_CONVERSATION_SESSION_KEY] = stored_conversation
+            request.session.modified = True
         except (EmbeddingError, RAGError) as error:
             messages.warning(
                 request,
                 f"Document Q&A could not be completed: {error}"
             )
 
+    conversation = hydrate_ask_conversation(
+        stored_conversation,
+        accessible_documents,
+    )
+
     return render(request, "ask_documents.html", {
         "question": question,
         "rag_result": rag_result,
+        "conversation": conversation,
         "has_embeddings": has_embeddings,
     })
 

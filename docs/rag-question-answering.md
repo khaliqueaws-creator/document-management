@@ -18,6 +18,12 @@ The feature is intentionally citation-first:
 - If no useful context is retrieved, the app returns a no-context answer instead
   of asking the model to guess.
 
+Ask Documents also supports bounded multi-turn conversations. Recent questions
+and answers are stored in the authenticated Django session so users can ask
+follow-ups such as "Which of those renew automatically?" Every turn still
+performs fresh MCP-backed retrieval. Conversation history helps resolve
+references, but only newly retrieved excerpts are accepted as factual evidence.
+
 ## RAG In This Project
 
 RAG stands for retrieval-augmented generation.
@@ -204,6 +210,8 @@ The main RAG settings are:
 | `AI_RAG_MAX_ANSWER_TOKENS` | Maximum generated answer tokens |
 | `AI_RAG_MIN_CONTEXT_CHARS` | Minimum combined retrieved text required before generation |
 | `AI_RAG_MIN_RETRIEVAL_SCORE` | Optional retrieval score floor before a chunk can be used |
+| `AI_RAG_CONVERSATION_MAX_TURNS` | Maximum recent conversation turns retained per session |
+| `AI_RAG_CONVERSATION_MAX_CHARS` | Maximum conversation text used to resolve follow-up questions |
 | `MCP_RETRIEVAL_ENABLED` | Enables the backend MCP retrieval boundary for RAG retrieval |
 | `MCP_RETRIEVAL_FALLBACK_ENABLED` | Falls back to direct retrieval when MCP retrieval fails |
 | `BEDROCK_TIMEOUT_SECONDS` | Bedrock client timeout |
@@ -219,6 +227,8 @@ AI_RAG_MAX_CONTEXT_CHARS: "1800"
 AI_RAG_MAX_ANSWER_TOKENS: "700"
 AI_RAG_MIN_CONTEXT_CHARS: "80"
 AI_RAG_MIN_RETRIEVAL_SCORE: "0"
+AI_RAG_CONVERSATION_MAX_TURNS: "5"
+AI_RAG_CONVERSATION_MAX_CHARS: "4000"
 MCP_RETRIEVAL_ENABLED: "True"
 MCP_RETRIEVAL_FALLBACK_ENABLED: "False"
 ```

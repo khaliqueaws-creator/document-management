@@ -131,6 +131,14 @@ class Command(BaseCommand):
                 f"rag_max_context_chars={settings.AI_RAG_MAX_CONTEXT_CHARS}",
                 f"rag_max_answer_tokens={settings.AI_RAG_MAX_ANSWER_TOKENS}",
                 f"rag_min_context_chars={settings.AI_RAG_MIN_CONTEXT_CHARS}",
+                (
+                    "rag_conversation_max_turns="
+                    f"{settings.AI_RAG_CONVERSATION_MAX_TURNS}"
+                ),
+                (
+                    "rag_conversation_max_chars="
+                    f"{settings.AI_RAG_CONVERSATION_MAX_CHARS}"
+                ),
             ]),
         )
 
