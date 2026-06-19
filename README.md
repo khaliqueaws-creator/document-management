@@ -17,6 +17,7 @@ Detailed architecture and operational documentation:
 - [Architecture](docs/architecture.md)
 - [Deployment Guide](docs/deployment.md)
 - [AI Workflow](docs/ai-workflow.md)
+- [OpenShift Demo Data Reset and Reload](docs/demo-data-reset-and-reload.md)
 - [MCP Document Retrieval Contract](docs/mcp-retrieval-contract.md)
 - [MCP Document Indexing Contract](docs/mcp-indexing-contract.md)
 
